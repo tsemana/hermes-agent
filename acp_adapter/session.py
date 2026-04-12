@@ -625,10 +625,19 @@ class SessionManager:
             if not isinstance(cfg, dict) or cfg.get("enabled", True) is not False
         ]
 
+        # Allow callers (e.g. delegate_task spawning `hermes acp` subprocesses)
+        # to widen or narrow the toolset via HERMES_ACP_TOOLSETS env var.
+        import os as _os
+        _env_toolsets = _os.environ.get("HERMES_ACP_TOOLSETS", "").strip()
+        if _env_toolsets:
+            _acp_toolsets = [t.strip() for t in _env_toolsets.split(",") if t.strip()]
+        else:
+            _acp_toolsets = ["hermes-acp"]
+
         kwargs = {
             "platform": "acp",
             "enabled_toolsets": _expand_acp_enabled_toolsets(
-                ["hermes-acp"],
+                _acp_toolsets,
                 mcp_server_names=configured_mcp_servers,
             ),
             "quiet_mode": True,
