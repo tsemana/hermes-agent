@@ -121,6 +121,26 @@ class TestCreateSession:
 
         assert state.agent.session_cwd == "/tmp/project"
 
+    def test_create_session_defaults_to_hermes_acp_toolset(self):
+        with patch("run_agent.AIAgent") as MockAgent:
+            MockAgent.return_value = MagicMock(name="MockAIAgent")
+            manager = SessionManager()
+            manager.create_session(cwd="/tmp/work")
+
+        call_kwargs = MockAgent.call_args.kwargs
+        assert call_kwargs["enabled_toolsets"] == ["hermes-acp"]
+
+    def test_create_session_honors_hermes_acp_toolsets_env(self, monkeypatch):
+        monkeypatch.setenv("HERMES_ACP_TOOLSETS", "browser, skills, session_search")
+
+        with patch("run_agent.AIAgent") as MockAgent:
+            MockAgent.return_value = MagicMock(name="MockAIAgent")
+            manager = SessionManager()
+            manager.create_session(cwd="/tmp/work")
+
+        call_kwargs = MockAgent.call_args.kwargs
+        assert call_kwargs["enabled_toolsets"] == ["browser", "skills", "session_search"]
+
 
 
 
