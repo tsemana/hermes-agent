@@ -264,20 +264,61 @@ def test_lifeos_engine_can_apply_honcho_promotion_candidate(tmp_path):
     assert status["promotion_candidates"][0]["status"] == "applied"
 
 
-def _mock_response(content="Done"):
-    msg = SimpleNamespace(content=content, tool_calls=None)
-    choice = SimpleNamespace(message=msg, finish_reason="stop")
+def _mock_response(content="Done", finish_reason="stop", tool_calls=None):
+    msg = SimpleNamespace(content=content, tool_calls=tool_calls)
+    choice = SimpleNamespace(message=msg, finish_reason=finish_reason)
     return SimpleNamespace(choices=[choice], model="test/model", usage=None)
+
+
+def _mock_tool_call(name="lifeos_test_tool", arguments="{}", call_id="c1"):
+    return SimpleNamespace(
+        id=call_id,
+        type="function",
+        function=SimpleNamespace(name=name, arguments=arguments),
+    )
 
 
 class _StubEngine(LifeOSContextEngine):
     def __init__(self):
         super().__init__()
         self.prefetch_calls = []
+        self.session_start_calls = []
+        self.session_end_calls = []
+        self.reset_calls = 0
+        self.tool_calls = []
 
     def prefetch(self, query: str, **kwargs) -> str:
         self.prefetch_calls.append(query)
         return "[LIFEOS TEST CONTEXT] Focus on Phoenix."
+
+    def on_session_start(self, session_id: str, **kwargs) -> None:
+        self.session_start_calls.append({"session_id": session_id, **kwargs})
+        super().on_session_start(session_id, **kwargs)
+
+    def on_session_end(self, session_id: str, messages):
+        self.session_end_calls.append({"session_id": session_id, "messages": list(messages)})
+        super().on_session_end(session_id, messages)
+
+    def on_session_reset(self) -> None:
+        self.reset_calls += 1
+        super().on_session_reset()
+
+    def get_tool_schemas(self):
+        schemas = super().get_tool_schemas()
+        schemas.append(
+            {
+                "name": "lifeos_test_tool",
+                "description": "Test-only context engine tool.",
+                "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+            }
+        )
+        return schemas
+
+    def handle_tool_call(self, name: str, args: dict, **kwargs) -> str:
+        if name == "lifeos_test_tool":
+            self.tool_calls.append({"name": name, "args": dict(args or {})})
+            return json.dumps({"ok": True, "source": "stub"})
+        return super().handle_tool_call(name, args, **kwargs)
 
 
 def test_run_agent_injects_context_engine_prefetch_into_user_turn(tmp_path):
@@ -314,3 +355,174 @@ def test_run_agent_injects_context_engine_prefetch_into_user_turn(tmp_path):
     assert result["final_response"] == "Done"
     assert engine.prefetch_calls == ["what next on Phoenix?"]
     assert any("[LIFEOS TEST CONTEXT] Focus on Phoenix." in msg.get("content", "") for msg in user_messages)
+
+
+def test_run_agent_does_not_inject_context_engine_prefetch_into_system_prompt(tmp_path):
+    engine = _StubEngine()
+    cfg = {
+        "context": {"engine": "lifeos"},
+        "lifeos_context": {"vault_path": str(tmp_path / "LifeOS")},
+        "agent": {},
+    }
+
+    with (
+        patch("hermes_cli.config.load_config", return_value=cfg),
+        patch("plugins.context_engine.load_context_engine", return_value=engine),
+        patch("agent.model_metadata.get_model_context_length", return_value=131_072),
+        patch("run_agent.get_tool_definitions", return_value=[]),
+        patch("run_agent.check_toolset_requirements", return_value={}),
+        patch("run_agent.OpenAI"),
+    ):
+        from run_agent import AIAgent
+
+        agent = AIAgent(
+            api_key="test-key-1234567890",
+            quiet_mode=True,
+            skip_context_files=True,
+            skip_memory=True,
+        )
+        agent.client = MagicMock()
+        agent.client.chat.completions.create.return_value = _mock_response("Done")
+
+        agent.run_conversation("what next on Phoenix?")
+        sent_messages = agent.client.chat.completions.create.call_args.kwargs["messages"]
+        system_messages = [m for m in sent_messages if m.get("role") == "system"]
+
+    assert system_messages
+    assert all("[LIFEOS TEST CONTEXT] Focus on Phoenix." not in msg.get("content", "") for msg in system_messages)
+
+
+def test_agent_registers_context_engine_tool_schemas_and_routes_tool_calls(tmp_path):
+    engine = _StubEngine()
+    cfg = {
+        "context": {"engine": "lifeos"},
+        "lifeos_context": {"vault_path": str(tmp_path / "LifeOS")},
+        "agent": {},
+    }
+
+    with (
+        patch("hermes_cli.config.load_config", return_value=cfg),
+        patch("plugins.context_engine.load_context_engine", return_value=engine),
+        patch("agent.model_metadata.get_model_context_length", return_value=131_072),
+        patch("run_agent.get_tool_definitions", return_value=[]),
+        patch("run_agent.check_toolset_requirements", return_value={}),
+        patch("run_agent.OpenAI"),
+    ):
+        from run_agent import AIAgent
+
+        agent = AIAgent(
+            api_key="test-key-1234567890",
+            quiet_mode=True,
+            skip_context_files=True,
+            skip_memory=True,
+        )
+        routed = json.loads(agent.context_compressor.handle_tool_call("lifeos_test_tool", {}, messages=[]))
+
+    assert "lifeos_test_tool" in agent.valid_tool_names
+    assert "lifeos_test_tool" in agent._context_engine_tool_names
+    assert any(t["function"]["name"] == "lifeos_test_tool" for t in agent.tools)
+    assert routed["ok"] is True
+    assert engine.tool_calls == [{"name": "lifeos_test_tool", "args": {}}]
+
+
+def test_agent_calls_context_engine_lifecycle_hooks_for_start_reset_and_end(tmp_path):
+    engine = _StubEngine()
+    cfg = {
+        "context": {"engine": "lifeos"},
+        "lifeos_context": {"vault_path": str(tmp_path / "LifeOS")},
+        "agent": {},
+    }
+
+    with (
+        patch("hermes_cli.config.load_config", return_value=cfg),
+        patch("plugins.context_engine.load_context_engine", return_value=engine),
+        patch("agent.model_metadata.get_model_context_length", return_value=131_072),
+        patch("run_agent.get_tool_definitions", return_value=[]),
+        patch("run_agent.check_toolset_requirements", return_value={}),
+        patch("run_agent.OpenAI"),
+    ):
+        from run_agent import AIAgent
+
+        agent = AIAgent(
+            api_key="test-key-1234567890",
+            quiet_mode=True,
+            skip_context_files=True,
+            skip_memory=True,
+        )
+        agent.reset_session_state()
+        agent.shutdown_memory_provider(messages=[{"role": "user", "content": "done"}])
+
+    assert len(engine.session_start_calls) == 1
+    start_call = engine.session_start_calls[0]
+    assert start_call["session_id"] == agent.session_id
+    assert start_call["hermes_home"]
+    assert start_call["platform"] == "cli"
+    assert start_call["model"] == agent.model
+    assert start_call["context_length"] == 131_072
+    assert engine.reset_calls == 1
+    assert len(engine.session_end_calls) == 1
+    assert engine.session_end_calls[0]["session_id"] == agent.session_id
+    assert engine.session_end_calls[0]["messages"] == [{"role": "user", "content": "done"}]
+
+
+def test_agent_falls_back_to_builtin_compressor_when_lifeos_engine_load_fails(tmp_path):
+    cfg = {
+        "context": {"engine": "lifeos"},
+        "lifeos_context": {"vault_path": str(tmp_path / "LifeOS")},
+        "agent": {},
+    }
+
+    with (
+        patch("hermes_cli.config.load_config", return_value=cfg),
+        patch("plugins.context_engine.load_context_engine", side_effect=RuntimeError("boom")),
+        patch("run_agent.get_tool_definitions", return_value=[]),
+        patch("run_agent.check_toolset_requirements", return_value={}),
+        patch("run_agent.OpenAI"),
+    ):
+        from run_agent import AIAgent
+
+        agent = AIAgent(
+            api_key="test-key-1234567890",
+            quiet_mode=True,
+            skip_context_files=True,
+            skip_memory=True,
+        )
+
+    assert agent.context_compressor.name == "compressor"
+    assert "lifeos_test_tool" not in getattr(agent, "valid_tool_names", set())
+
+
+def test_run_agent_routes_context_engine_tool_call_end_to_end(tmp_path):
+    engine = _StubEngine()
+    cfg = {
+        "context": {"engine": "lifeos"},
+        "lifeos_context": {"vault_path": str(tmp_path / "LifeOS")},
+        "agent": {},
+    }
+    tc = _mock_tool_call(name="lifeos_test_tool", arguments="{}", call_id="c1")
+    resp1 = _mock_response(content="", finish_reason="tool_calls", tool_calls=[tc])
+    resp2 = _mock_response(content="Done", finish_reason="stop")
+
+    with (
+        patch("hermes_cli.config.load_config", return_value=cfg),
+        patch("plugins.context_engine.load_context_engine", return_value=engine),
+        patch("agent.model_metadata.get_model_context_length", return_value=131_072),
+        patch("run_agent.get_tool_definitions", return_value=[]),
+        patch("run_agent.check_toolset_requirements", return_value={}),
+        patch("run_agent.OpenAI"),
+    ):
+        from run_agent import AIAgent
+
+        agent = AIAgent(
+            api_key="test-key-1234567890",
+            quiet_mode=True,
+            skip_context_files=True,
+            skip_memory=True,
+        )
+        agent.client = MagicMock()
+        agent.client.chat.completions.create.side_effect = [resp1, resp2]
+
+        result = agent.run_conversation("use the lifeos tool")
+
+    assert result["final_response"] == "Done"
+    assert engine.tool_calls == [{"name": "lifeos_test_tool", "args": {}}]
