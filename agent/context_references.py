@@ -341,11 +341,27 @@ async def _default_url_fetcher(url: str) -> str:
 
     raw = await web_extract_tool([url], format="markdown")
     payload = json.loads(raw)
-    docs = payload.get("results", [])
-    if not docs:
+
+    # Current web_extract payload shape is {"results": [...]}. Keep a
+    # compatibility fallback for older {"data": {"documents": [...]}} callers.
+    docs = payload.get("results")
+    if not isinstance(docs, list):
+        docs = payload.get("data", {}).get("documents", [])
+
+    if not docs or not isinstance(docs, list):
         return ""
-    doc = docs[0]
-    return str(doc.get("content") or doc.get("raw_content") or "").strip()
+
+    doc = docs[0] if isinstance(docs[0], dict) else {}
+
+    # If extraction failed for this item, there is no content to inject into
+    # the prompt. Tool failure display is handled separately by agent.display.
+    error = doc.get("error")
+    if error and isinstance(error, str) and error.strip():
+        return ""
+
+    # Return extracted content, falling back through known keys
+    content = doc.get("content") or doc.get("raw_content") or doc.get("markdown")
+    return str(content or "").strip()
 
 
 def _resolve_path(cwd: Path, target: str, *, allowed_root: Path | None = None) -> Path:

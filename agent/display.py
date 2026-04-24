@@ -1225,25 +1225,43 @@ def _detect_tool_failure(tool_name: str, result: str | None) -> tuple[bool, str]
                 return True, f" [exit {exit_code}]"
         return False, ""
 
-    # Memory: distinguish "store full" from real errors.
-    if tool_name == "memory":
-        if isinstance(data, dict):
-            if data.get("success") is False and "exceed the limit" in data.get("error", ""):
-                return True, " [full]"
+    # Memory-specific: distinguish "full" from real errors
+    if tool_name == "memory" and isinstance(data, dict):
+        error_text = str(data.get("error", ""))
+        if data.get("success") is False and "exceed the limit" in error_text:
+            return True, " [full]"
 
-    # Structured error in JSON result (any tool that surfaces {"error": ...}).
-    if isinstance(data, dict):
-        err = data.get("error") or data.get("message")
-        if err and (data.get("success") is False or "error" in data):
-            return True, f" [{_trim_error(str(err))}]"
-
-    # Generic heuristic for non-terminal tools
+    # Generic heuristic for non-terminal tools.
     # Multimodal tool results (dicts with _multimodal=True) are not strings —
     # treat them as successes since failures would be JSON-encoded strings.
     if not isinstance(result, str):
         return False, ""
+
+    # JSON-aware generic detection for non-terminal tools. Many successful
+    # tools include per-item ``error: null`` placeholders, so raw substring
+    # checks are too noisy.
+    if isinstance(data, dict):
+        if data.get("success") is False:
+            return True, " [error]"
+
+        top_error = data.get("error")
+        if isinstance(top_error, str) and top_error.strip():
+            return True, " [error]"
+
+        results = data.get("results")
+        if isinstance(results, list):
+            for item in results:
+                if isinstance(item, dict):
+                    item_error = item.get("error")
+                    if isinstance(item_error, str) and item_error.strip():
+                        return True, " [error]"
+            return False, ""
+
+        return False, ""
+
+    # Fallback heuristic for non-JSON tool outputs.
     lower = result[:500].lower()
-    if '"error"' in lower or '"failed"' in lower or result.startswith("Error"):
+    if '"failed"' in lower or result.startswith("Error"):
         return True, " [error]"
 
     return False, ""

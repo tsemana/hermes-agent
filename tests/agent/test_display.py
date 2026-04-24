@@ -11,6 +11,7 @@ from agent.display import (
     get_cute_tool_message,
     redact_tool_args_for_display,
     set_tool_preview_max_len,
+    _detect_tool_failure,
     _render_inline_unified_diff,
     _summarize_rendered_diff_sections,
     render_edit_diff_with_delta,
@@ -294,6 +295,20 @@ class TestCuteToolMessagePreviewLength:
         )
 
         assert text in line
+
+
+class TestDetectToolFailure:
+    def test_web_extract_success_with_null_item_errors_is_not_failure(self):
+        result = '{"results": [{"url": "https://example.com", "title": "Example Domain", "content": "body", "error": null}]}'
+        assert _detect_tool_failure("web_extract", result) == (False, "")
+
+    def test_web_extract_item_error_is_failure(self):
+        result = '{"results": [{"url": "https://blocked.test", "title": "", "content": "", "error": "Blocked by website policy"}]}'
+        assert _detect_tool_failure("web_extract", result) == (True, " [error]")
+
+    def test_top_level_success_false_is_failure(self):
+        result = '{"success": false, "error": "boom"}'
+        assert _detect_tool_failure("web_extract", result) == (True, " [error]")
 
 
 class TestEditDiffPreview:

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import subprocess
+import sys
+import types
 from pathlib import Path
 from unittest.mock import patch
 
@@ -266,6 +269,78 @@ async def test_async_url_expansion_uses_fetcher(sample_repo: Path):
     assert result.expanded
     assert "Important details." in result.message
     assert result.injected_tokens > 0
+
+
+@pytest.mark.asyncio
+async def test_default_url_fetcher_supports_current_web_extract_results_shape(monkeypatch):
+    from agent.context_references import _default_url_fetcher
+
+    async def fake_web_extract(urls, format=None, use_llm_processing=True):
+        assert urls == ["https://example.com/spec"]
+        return json.dumps({
+            "results": [
+                {
+                    "url": "https://example.com/spec",
+                    "title": "Spec",
+                    "content": "# Spec\n\nImportant details.",
+                    "error": None,
+                }
+            ]
+        })
+
+    fake_module = types.SimpleNamespace(web_extract_tool=fake_web_extract)
+    monkeypatch.setitem(sys.modules, "tools.web_tools", fake_module)
+
+    content = await _default_url_fetcher("https://example.com/spec")
+
+    assert content == "# Spec\n\nImportant details."
+
+
+@pytest.mark.asyncio
+async def test_default_url_fetcher_keeps_legacy_documents_fallback(monkeypatch):
+    from agent.context_references import _default_url_fetcher
+
+    async def fake_web_extract(urls, format=None, use_llm_processing=True):
+        return json.dumps({
+            "data": {
+                "documents": [
+                    {
+                        "content": "legacy content",
+                    }
+                ]
+            }
+        })
+
+    fake_module = types.SimpleNamespace(web_extract_tool=fake_web_extract)
+    monkeypatch.setitem(sys.modules, "tools.web_tools", fake_module)
+
+    content = await _default_url_fetcher("https://example.com/spec")
+
+    assert content == "legacy content"
+
+
+@pytest.mark.asyncio
+async def test_default_url_fetcher_returns_empty_for_item_error(monkeypatch):
+    from agent.context_references import _default_url_fetcher
+
+    async def fake_web_extract(urls, format=None, use_llm_processing=True):
+        return json.dumps({
+            "results": [
+                {
+                    "url": "https://example.com/spec",
+                    "title": "",
+                    "content": "",
+                    "error": "Blocked by website policy",
+                }
+            ]
+        })
+
+    fake_module = types.SimpleNamespace(web_extract_tool=fake_web_extract)
+    monkeypatch.setitem(sys.modules, "tools.web_tools", fake_module)
+
+    content = await _default_url_fetcher("https://example.com/spec")
+
+    assert content == ""
 
 
 def test_sync_url_expansion_uses_async_fetcher(sample_repo: Path):
