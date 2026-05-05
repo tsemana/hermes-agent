@@ -4,6 +4,7 @@ export interface ThemeColors {
   border: string
   text: string
   muted: string
+  dim: string
   completionBg: string
   completionCurrentBg: string
   completionMetaBg: string
@@ -258,6 +259,7 @@ export const DARK_THEME: Theme = {
     border: '#CD7F32',
     text: '#FFF8DC',
     muted: '#CC9B1F',
+    dim: '#CC9B1F',
     // Bumped from the old `#B8860B` darkgoldenrod (~53% luminance) which
     // read as barely-visible on dark terminals for long body text.  The
     // new value sits ~60% luminance — readable without losing the "muted /
@@ -311,6 +313,7 @@ export const LIGHT_THEME: Theme = {
     border: '#7A4F1F',
     text: '#3D2F13',
     muted: '#7A5A0F',
+    dim: '#7A5A0F',
     completionBg: '#F5F5F5',
     completionCurrentBg: mix('#F5F5F5', '#A0651C', 0.25),
     completionMetaBg: '#F5F5F5',
@@ -542,6 +545,7 @@ export function fromSkin(
         border: c('ui_border') ?? c('banner_border') ?? d.color.border,
         text: c('ui_text') ?? c('banner_text') ?? d.color.text,
         muted,
+        dim: muted,
         completionBg,
         completionCurrentBg,
         completionMetaBg,
