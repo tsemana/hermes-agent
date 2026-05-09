@@ -382,6 +382,7 @@ class TestDelegateTask(unittest.TestCase):
                 toolsets=["browser", "skills", "session_search", "delegation"],
                 model=None,
                 max_iterations=10,
+                task_count=1,
                 parent_agent=parent,
                 override_acp_command="hermes",
                 override_acp_args=["acp"],
@@ -410,6 +411,7 @@ class TestDelegateTask(unittest.TestCase):
                 toolsets=None,
                 model=None,
                 max_iterations=10,
+                task_count=1,
                 parent_agent=parent,
             )
 
