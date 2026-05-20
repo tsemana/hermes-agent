@@ -1106,7 +1106,11 @@ class APIServerAdapter(BasePlatformAdapter):
 
         runtime_kwargs = _resolve_runtime_agent_kwargs()
         reasoning_config = GatewayRunner._load_reasoning_config()
-        model = _resolve_gateway_model()
+        # _resolve_runtime_agent_kwargs() may return a fallback-specific model when
+        # the primary provider is unavailable. Consume it here instead of passing
+        # it through **runtime_kwargs, otherwise AIAgent receives model twice.
+        runtime_model = runtime_kwargs.pop("model", None)
+        model = runtime_model or _resolve_gateway_model()
 
         # When the primary provider's auth fails (expired token / 429 quota
         # cap), _resolve_runtime_agent_kwargs() falls through to the fallback

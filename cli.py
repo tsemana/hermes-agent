@@ -13190,6 +13190,27 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin):
                     event.app.invalidate()
                     return
 
+                # Warp and some embedded terminals do not reliably pass through
+                # modified Enter or Ctrl+G keybindings for multiline input. Keep
+                # a slash-command escape hatch that runs on the UI thread and
+                # opens the external editor without requiring any special key
+                # sequence. Optional text after /editor seeds the draft.
+                if text and _looks_like_slash_command(text):
+                    try:
+                        from hermes_cli.commands import resolve_command as _resolve_cmd
+                        _parts = text.split(maxsplit=1)
+                        _cmd = _resolve_cmd(_parts[0].lstrip('/').lower())
+                        if _cmd and _cmd.name == "editor":
+                            seed = _parts[1] if len(_parts) > 1 else ""
+                            event.current_buffer.text = seed
+                            event.current_buffer.cursor_position = len(seed)
+                            cli_ref._open_external_editor(event.current_buffer)
+                            return
+                    except Exception as exc:
+                        _cprint(f"  {_DIM}Failed to open editor: {exc}{_RST}")
+                        event.app.current_buffer.reset(append_to_history=True)
+                        return
+
                 # Snapshot and clear attached images
                 images = list(self._attached_images)
                 self._attached_images.clear()
