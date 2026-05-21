@@ -1,0 +1,138 @@
+#!/usr/bin/env bash
+#
+# pre-commit hook: Supply-chain age policy *containment* gate.
+#
+# IMPORTANT: this is a containment layer, not an ingress block. By the
+# time this hook fires, `npm install` / `pip install` has already run on
+# this machine and any malicious lifecycle script (postinstall, setup.py)
+# has already executed locally. The primary ingress defenses live
+# elsewhere:
+#   - .npmrc with ignore-scripts=true (blocks npm lifecycle execution)
+#   - uv pip install --exclude-newer --require-hashes (refuses post-cutoff)
+#   - publish-age floor enforced before any install happens
+#
+# What THIS hook actually does:
+#   - Blocks a compromised lockfile from being committed to the repo
+#   - Prevents propagation to teammates, CI runners, and deployment
+#   - Surfaces "you just installed something brand new" at the commit
+#     boundary, giving you a chance to roll back before propagating
+#
+# Mechanics: runs scripts/npm-audit-min-age.js on any staged
+# package-lock.json, and `uv pip compile --exclude-newer` on any
+# staged pyproject.toml. Blocks the commit if either finds a
+# dependency younger than MIN_AGE_DAYS.
+#
+# Enable per-clone with:
+#   git config core.hooksPath scripts/git-hooks
+#
+# Bypass after eyes-open review:
+#   SKIP_SUPPLY_CHAIN=1 git commit ...
+#
+# Environment:
+#   MIN_AGE_DAYS         Minimum age in days (default: 21)
+#   SKIP_SUPPLY_CHAIN    Set to 1 to bypass the audit for one commit
+#
+
+set -euo pipefail
+
+if [ "${SKIP_SUPPLY_CHAIN:-0}" = "1" ]; then
+  echo "[pre-commit] SKIP_SUPPLY_CHAIN=1 — supply-chain audit bypassed."
+  exit 0
+fi
+
+MIN_AGE_DAYS="${MIN_AGE_DAYS:-21}"
+
+# Cross-platform cutoff date (BSD `date` on macOS, GNU `date` on Linux).
+if CUTOFF=$(date -v-"${MIN_AGE_DAYS}"d +%Y-%m-%d 2>/dev/null); then
+  :
+else
+  CUTOFF=$(date -d "${MIN_AGE_DAYS} days ago" +%Y-%m-%d)
+fi
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+STAGED=$(git diff --cached --name-only --diff-filter=ACMR)
+
+NEED_PY=0
+NEED_NPM_FILES=""
+
+while IFS= read -r f; do
+  case "$f" in
+    pyproject.toml)
+      NEED_PY=1
+      ;;
+    *package-lock.json)
+      NEED_NPM_FILES+="${f}"$'\n'
+      ;;
+  esac
+done <<< "$STAGED"
+
+if [ "$NEED_PY" = "0" ] && [ -z "$NEED_NPM_FILES" ]; then
+  exit 0
+fi
+
+echo "[pre-commit] Supply-chain age audit: MIN_AGE_DAYS=${MIN_AGE_DAYS} (cutoff ${CUTOFF})"
+
+# ----- Python audit -----
+if [ "$NEED_PY" = "1" ]; then
+  if ! command -v uv >/dev/null 2>&1; then
+    echo "[pre-commit] FAIL: 'uv' not found in PATH. Install with: brew install uv" >&2
+    echo "[pre-commit] Bypass with: SKIP_SUPPLY_CHAIN=1 git commit ..." >&2
+    exit 1
+  fi
+  TMP_LOCK=$(mktemp -t hermes-precommit-pylock.XXXXXX)
+  trap 'rm -f "$TMP_LOCK"' EXIT
+  echo "[pre-commit] Running: uv pip compile pyproject.toml --exclude-newer ${CUTOFF}"
+  if ! (cd "$REPO_ROOT" && uv pip compile pyproject.toml \
+        --exclude-newer "$CUTOFF" --quiet --output-file "$TMP_LOCK"); then
+    echo "[pre-commit] FAIL: Python deps cannot resolve under ${MIN_AGE_DAYS}d floor." >&2
+    echo "[pre-commit] See SUPPLY_CHAIN_EXCEPTIONS.md or Remediation Appendix A in the arm64-fix handoff doc." >&2
+    echo "[pre-commit] Bypass with: SKIP_SUPPLY_CHAIN=1 git commit ..." >&2
+    exit 1
+  fi
+fi
+
+# ----- npm audit(s) -----
+if [ -n "$NEED_NPM_FILES" ]; then
+  # Find a usable node binary. Prefer PATH; fall back to nvm; fall back to
+  # absolute path commonly used on this machine.
+  NODE_CMD=""
+  if command -v node >/dev/null 2>&1; then
+    NODE_CMD="node"
+  elif [ -d "$HOME/.nvm" ] && [ -s "$HOME/.nvm/nvm.sh" ]; then
+    # shellcheck disable=SC1091
+    \. "$HOME/.nvm/nvm.sh" >/dev/null 2>&1
+    if command -v node >/dev/null 2>&1; then NODE_CMD="node"; fi
+  fi
+  if [ -z "$NODE_CMD" ]; then
+    for cand in "$HOME"/.nvm/versions/node/*/bin/node; do
+      [ -x "$cand" ] && NODE_CMD="$cand" && break
+    done
+  fi
+  if [ -z "$NODE_CMD" ]; then
+    echo "[pre-commit] FAIL: 'node' not found. Install via nvm or brew." >&2
+    echo "[pre-commit] Bypass with: SKIP_SUPPLY_CHAIN=1 git commit ..." >&2
+    exit 1
+  fi
+
+  AUDIT_SCRIPT="${REPO_ROOT}/scripts/npm-audit-min-age.js"
+  if [ ! -f "$AUDIT_SCRIPT" ]; then
+    echo "[pre-commit] FAIL: ${AUDIT_SCRIPT} not found." >&2
+    exit 1
+  fi
+
+  while IFS= read -r lock; do
+    [ -z "$lock" ] && continue
+    LOCK_ABS="${REPO_ROOT}/${lock}"
+    [ -f "$LOCK_ABS" ] || { echo "[pre-commit] skip ${lock} (file not present)"; continue; }
+    echo "[pre-commit] Running: npm-audit-min-age.js ${lock}"
+    if ! MIN_AGE_DAYS="$MIN_AGE_DAYS" "$NODE_CMD" "$AUDIT_SCRIPT" "$LOCK_ABS"; then
+      echo "[pre-commit] FAIL: npm audit violations in ${lock}." >&2
+      echo "[pre-commit] See SUPPLY_CHAIN_EXCEPTIONS.md or Remediation Appendix B in the arm64-fix handoff doc." >&2
+      echo "[pre-commit] Bypass with: SKIP_SUPPLY_CHAIN=1 git commit ..." >&2
+      exit 1
+    fi
+  done <<< "$NEED_NPM_FILES"
+fi
+
+echo "[pre-commit] Supply-chain age audit passed."
+exit 0
