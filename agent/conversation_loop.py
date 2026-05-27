@@ -616,6 +616,23 @@ def run_conversation(
     # over instead of spinning. Reset here so each turn starts fresh. See #26080.
     agent._auth_pool_refresh_counts = {}
 
+    # Context engine prefetch: lets a pluggable engine inject domain-specific
+    # operating context into the current user turn without mutating the
+    # cached system prompt or waiting for compression to fire.
+    _context_engine_prefetch_cache = ""
+    if getattr(agent, "context_compressor", None):
+        try:
+            _query = original_user_message if isinstance(original_user_message, str) else ""
+            _context_engine_prefetch_cache = agent.context_compressor.prefetch(
+                _query,
+                session_id=agent.session_id,
+                conversation_history=list(messages),
+                model=agent.model,
+                platform=getattr(agent, "platform", None) or "",
+            ) or ""
+        except Exception as exc:
+            logger.debug("Context engine prefetch failed: %s", exc)
+
     # Optional opt-in runtime: if api_mode == codex_app_server, hand the
     # turn to the codex app-server subprocess (terminal/file ops/patching
     # all run inside Codex). Default Hermes path is bypassed entirely.
@@ -796,6 +813,8 @@ def run_conversation(
                         _injections.append(_fenced)
                 if _plugin_user_context:
                     _injections.append(_plugin_user_context)
+                if _context_engine_prefetch_cache:
+                    _injections.append(_context_engine_prefetch_cache)
                 if _injections:
                     _base = api_msg.get("content", "")
                     if isinstance(_base, str):
