@@ -11,6 +11,7 @@ import { FACES } from '../content/faces.js'
 import { VERBS } from '../content/verbs.js'
 import { fmtDuration } from '../domain/messages.js'
 import { stickyPromptFromViewport } from '../domain/viewport.js'
+import { buildIdentityModelLabel } from '../lib/sessionIdentity.js'
 import { buildSubagentTree, treeTotals, widthByDepth } from '../lib/subagentTree.js'
 import { fmtK } from '../lib/text.js'
 import { useScrollbarSnapshot, useViewportSnapshot } from '../lib/viewportStore.js'
@@ -413,6 +414,8 @@ export function StatusRule({
   modelReasoningEffort,
   indicatorStyle = 'kaomoji',
   notice,
+  persona,
+  sessionTitle,
   usage,
   bgCount,
   lastTurnEndedAt,
@@ -438,7 +441,7 @@ export function StatusRule({
       : ''
 
   const bar = !segs.compactCtx && usage.context_max ? ctxBar(pct) : ''
-  const modelText = modelLabel(model, modelReasoningEffort, modelFast)
+  const modelText = buildIdentityModelLabel(modelLabel(model, modelReasoningEffort, modelFast), persona, sessionTitle)
 
   // A credits notice replaces the status/verb slot, but only when idle —
   // while busy the FaceTicker always wins (R1 render priority). The notice
@@ -781,7 +784,9 @@ interface StatusRuleProps {
   modelReasoningEffort?: string
   indicatorStyle?: IndicatorStyle
   notice?: Notice | null
+  persona?: string
   sessionStartedAt?: null | number
+  sessionTitle?: string
   status: string
   statusColor: string
   t: Theme

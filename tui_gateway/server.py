@@ -3081,6 +3081,28 @@ def _current_profile_name() -> str:
 DESKTOP_BACKEND_CONTRACT = 2
 
 
+def _resolve_session_persona() -> str:
+    try:
+        from hermes_cli.terminal_title import resolve_persona_name
+
+        return resolve_persona_name()
+    except Exception:
+        return "Hermes"
+
+
+def _resolve_session_title(agent) -> str:
+    session_id = str(getattr(agent, "session_id", "") or "")
+    if not session_id:
+        return ""
+    db = _get_db()
+    if db is None:
+        return ""
+    try:
+        return db.get_session_title(session_id) or ""
+    except Exception:
+        return ""
+
+
 def _session_info(agent, session: dict | None = None) -> dict:
     if session is None:
         for candidate in _sessions.values():
@@ -3128,6 +3150,8 @@ def _session_info(agent, session: dict | None = None) -> dict:
         "service_tier": service_tier,
         "fast": service_tier == "priority",
         "yolo": yolo,
+        "persona": _resolve_session_persona(),
+        "title": _resolve_session_title(agent),
         "tools": {},
         "skills": {},
         "cwd": cwd,
@@ -8715,6 +8739,7 @@ def _run_prompt_submit(rid, sid: str, session: dict, text: Any) -> None:
             with session["history_lock"]:
                 _clear_inflight_turn(session)
             _emit("message.complete", sid, payload)
+            _emit("session.info", sid, _session_info(agent))
 
             # ── /goal continuation (Ralph-style loop) ─────────────────
             # After every TUI turn, if a /goal is active, ask the judge

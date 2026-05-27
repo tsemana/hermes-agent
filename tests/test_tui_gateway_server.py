@@ -4610,6 +4610,26 @@ def test_session_info_includes_session_title(monkeypatch):
     assert info["title"] == "Dashboard title"
 
 
+def test_session_info_includes_persona_and_session_title(monkeypatch):
+    class FakeDB:
+        def get_session_title(self, session_id):
+            assert session_id == "session-123"
+            return "Fix TUI title display"
+
+    monkeypatch.setattr(server, "_get_db", lambda: FakeDB())
+    monkeypatch.setattr(
+        "hermes_cli.terminal_title.resolve_persona_name",
+        lambda: "Helm",
+    )
+
+    info = server._session_info(
+        types.SimpleNamespace(tools=[], model="gpt-5.5", provider="openai-codex", session_id="session-123"),
+    )
+
+    assert info["persona"] == "Helm"
+    assert info["title"] == "Fix TUI title display"
+
+
 # ---------------------------------------------------------------------------
 # History-mutating commands must reject while session.running is True.
 # Without these guards, prompt.submit's post-run history write either

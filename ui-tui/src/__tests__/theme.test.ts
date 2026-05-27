@@ -314,4 +314,26 @@ describe('fromSkin', () => {
     expect(color.ok).toBe('#008000')
     expect(color.statusGood).toBe('#008000')
   })
+
+  it('maps explicit TUI status bar colors from skins', async () => {
+    const { fromSkin } = await importThemeWithCleanEnv()
+    const { color } = fromSkin(
+      {
+        status_bar_bg: '#0F172A',
+        status_bar_text: '#CBD5E1',
+        status_bar_good: '#10B981',
+        status_bar_warn: '#F59E0B',
+        status_bar_bad: '#FB923C',
+        status_bar_critical: '#F87171'
+      },
+      {}
+    )
+
+    expect(color.statusBg).toBe('#0F172A')
+    expect(color.statusFg).toBe('#CBD5E1')
+    expect(color.statusGood).toBe('#10B981')
+    expect(color.statusWarn).toBe('#F59E0B')
+    expect(color.statusBad).toBe('#FB923C')
+    expect(color.statusCritical).toBe('#F87171')
+  })
 })
