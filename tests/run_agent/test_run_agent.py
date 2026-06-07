@@ -2987,6 +2987,21 @@ class TestConcurrentToolExecution:
         assert post_call[1]["error_type"] is None
         assert isinstance(post_call[1]["duration_ms"], int)
 
+    def test_invoke_tool_handles_session_usage_directly(self, agent):
+        """_invoke_tool should expose live usage telemetry to agent-callable tools."""
+        agent.session_input_tokens = 11
+        agent.session_output_tokens = 7
+        agent.session_total_tokens = 18
+        agent.session_api_calls = 2
+
+        result = json.loads(agent._invoke_tool("session_usage", {}, "task-1"))
+
+        assert result["success"] is True
+        assert result["usage"]["tokens"]["input"] == 11
+        assert result["usage"]["tokens"]["output"] == 7
+        assert result["usage"]["tokens"]["total"] == 18
+        assert result["usage"]["api_calls"] == 2
+
     def test_invoke_tool_blocked_returns_error_and_skips_execution(self, agent, monkeypatch):
         """_invoke_tool should return error JSON when a plugin blocks the tool."""
         monkeypatch.setattr(

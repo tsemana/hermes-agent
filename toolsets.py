@@ -57,8 +57,8 @@ _HERMES_CORE_TOOLS = [
     # move, so they live in the `project` toolset and are enabled solely by the
     # GUI gateway (tui_gateway/server.py::_load_enabled_toolsets) — keeping them
     # off every CLI/messaging/cron schema (narrow waist).
-    # Session history search
-    "session_search",
+    # Session history search + live telemetry
+    "session_search", "session_usage",
     # Clarifying questions
     "clarify",
     # Code execution + delegation
@@ -229,6 +229,18 @@ TOOLSETS = {
         "tools": ["project_list", "project_create", "project_switch"],
         "includes": []
     },
+
+    "session": {
+        "description": "Session introspection tools: recall past conversations and inspect live usage telemetry",
+        "tools": ["session_search", "session_usage"],
+        "includes": []
+    },
+
+    "session_usage": {
+        "description": "Live usage telemetry for the current Hermes session",
+        "tools": ["session_usage"],
+        "includes": []
+    },
     
     "clarify": {
         "description": "Ask the user clarifying questions (multiple-choice or open-ended)",
@@ -388,7 +400,7 @@ TOOLSETS = {
             "browser_press", "browser_get_images",
             "browser_vision", "browser_console", "browser_cdp", "browser_dialog",
             "todo", "memory",
-            "session_search",
+            "session_search", "session_usage",
             "execute_code", "delegate_task",
         ],
         "includes": []
@@ -414,8 +426,8 @@ TOOLSETS = {
             "browser_vision", "browser_console", "browser_cdp", "browser_dialog",
             # Planning & memory
             "todo", "memory",
-            # Session history search
-            "session_search",
+            # Session history search + live telemetry
+            "session_search", "session_usage",
             # Code execution + delegation
             "execute_code", "delegate_task",
             # Cronjob management

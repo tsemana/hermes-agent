@@ -162,6 +162,39 @@ class TestUsageCachedAgent:
         assert "Cache read" not in result
         assert "Cache write" not in result
 
+    @pytest.mark.asyncio
+    async def test_cost_included_status(self):
+        """Subscription-included providers show 'included' instead of dollar amount."""
+        agent = _make_mock_agent(provider="openai-codex")
+        runner = _make_runner(SK, cached_agent=agent)
+        event = MagicMock()
+
+        with patch("agent.rate_limit_tracker.format_rate_limit_compact", return_value="RPM: 50/60"), \
+             patch("agent.usage_pricing.estimate_usage_cost") as mock_cost:
+            mock_cost.return_value = MagicMock(amount_usd=None, status="included")
+            result = await runner._handle_usage_command(event)
+
+        assert "Cost: included" in result
+
+    @pytest.mark.asyncio
+    async def test_usage_command_prefers_accumulated_session_cost(self):
+        """Gateway /usage should report the same accumulated cost source as session_usage."""
+        agent = _make_mock_agent(
+            session_estimated_cost_usd=0.9876,
+            session_cost_status="estimated",
+            session_cost_source="session_accumulator",
+        )
+        runner = _make_runner(SK, cached_agent=agent)
+        event = MagicMock()
+
+        with patch("agent.rate_limit_tracker.format_rate_limit_compact", return_value="RPM: 50/60"), \
+             patch("agent.usage_pricing.estimate_usage_cost") as mock_cost:
+            mock_cost.return_value = MagicMock(amount_usd=0.1234, status="estimated")
+            result = await runner._handle_usage_command(event)
+
+        assert "$0.9876" in result
+        assert "$0.1234" not in result
+
 
 class TestUsageAccountSection:
     """Account-limits section appended to /usage output (PR #2486)."""

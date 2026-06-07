@@ -2061,6 +2061,10 @@ def invoke_tool(agent, function_name: str, function_args: dict, effective_task_i
                 ),
                 next_args,
             )
+    elif function_name == "session_usage":
+        def _execute(next_args: dict) -> Any:
+            from tools.session_usage_tool import session_usage_tool as _session_usage_tool
+            return _finish_agent_tool(_session_usage_tool(agent=agent), next_args)
     elif function_name == "session_search":
         def _execute(next_args: dict) -> Any:
             session_db = agent._get_session_db_for_recall()

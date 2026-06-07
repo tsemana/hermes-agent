@@ -737,10 +737,10 @@ def test_load_enabled_toolsets_rejects_disabled_mcp_env(monkeypatch, capsys):
         config_mod, "load_config", lambda: {"platform_toolsets": {"cli": ["memory"]}}
     )
 
-    # Sorted: ["kanban", "memory", "project"]. `kanban` is auto-recovered by
-    # _get_platform_tools (a non-configurable platform toolset in hermes-cli's
-    # universe); `project` is GUI-only, folded in by _load_enabled_toolsets.
-    assert server._load_enabled_toolsets() == ["kanban", "memory", "project"]
+    # Sorted: ["kanban", "memory", "project", "session"]. `kanban` and `session`
+    # are recovered from the CLI platform tool universe; `project` is folded in
+    # by the TUI gateway because it is GUI-only.
+    assert server._load_enabled_toolsets() == ["kanban", "memory", "project", "session"]
     err = capsys.readouterr().err
     assert "ignoring disabled MCP servers" in err
     assert "mcp-off" in err
@@ -761,7 +761,7 @@ def test_load_enabled_toolsets_falls_back_when_tui_env_invalid(monkeypatch, caps
         config_mod, "load_config", lambda: {"platform_toolsets": {"cli": ["memory"]}}
     )
 
-    assert server._load_enabled_toolsets() == ["kanban", "memory", "project"]
+    assert server._load_enabled_toolsets() == ["kanban", "memory", "project", "session"]
     assert "using configured CLI toolsets" in capsys.readouterr().err
 
 
@@ -6646,6 +6646,7 @@ def test_browser_manage_connect_default_local_reports_launch_hint(monkeypatch):
     )
     assert any(
         "No supported Chromium-family browser executable was found" in line
+        or "Start a Chromium-family browser with remote debugging" in line
         or "Start Chrome with remote debugging" in line
         for line in resp["result"]["messages"]
     )

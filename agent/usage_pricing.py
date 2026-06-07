@@ -823,6 +823,10 @@ def normalize_usage(
     output_details = getattr(response_usage, "output_tokens_details", None)
     if output_details:
         reasoning_tokens = _to_int(getattr(output_details, "reasoning_tokens", 0))
+    if not reasoning_tokens:
+        completion_details = getattr(response_usage, "completion_tokens_details", None)
+        if completion_details:
+            reasoning_tokens = _to_int(getattr(completion_details, "reasoning_tokens", 0))
 
     return CanonicalUsage(
         input_tokens=input_tokens,

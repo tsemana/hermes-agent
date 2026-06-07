@@ -211,6 +211,7 @@ class TestAgentLoopTools:
         assert "todo" in _AGENT_LOOP_TOOLS
         assert "memory" in _AGENT_LOOP_TOOLS
         assert "session_search" in _AGENT_LOOP_TOOLS
+        assert "session_usage" in _AGENT_LOOP_TOOLS
         assert "delegate_task" in _AGENT_LOOP_TOOLS
 
     def test_no_regular_tools_in_set(self):
