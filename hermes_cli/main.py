@@ -1867,6 +1867,10 @@ def _make_tui_argv(tui_dir: Path, tui_dev: bool) -> tuple[list[str], Path]:
     should_build = True
     if termux_startup:
         should_build = did_install or termux_need_rebuild
+    # Cross-user launchers (work-helm) can't write dist/ in another user's runtime; when
+    # the prebuilt bundle is already present, run it as-is instead of rebuilding.
+    if os.environ.get("HERMES_TUI_SKIP_NPM_INSTALL") and (tui_dir / "dist" / "entry.js").is_file():
+        should_build = False
 
     if should_build:
         npm = _node_bin("npm")
