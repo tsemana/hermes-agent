@@ -1782,6 +1782,11 @@ def _make_tui_argv(tui_dir: Path, tui_dev: bool) -> tuple[list[str], Path]:
     )
     if (
         not skip_install_for_fresh_termux_bundle
+        # HERMES_TUI_SKIP_NPM_INSTALL: launch the prebuilt dist without the per-launch
+        # workspace npm install. Set by cross-user launchers (e.g. work-helm) where the
+        # runtime's node_modules is owned by another user and not writable — the deps are
+        # already present, so the (always-True, monorepo-scoped) install only fails.
+        and not os.environ.get("HERMES_TUI_SKIP_NPM_INSTALL")
         and _tui_need_npm_install(tui_dir)
     ):
         npm = _node_bin("npm")
