@@ -688,6 +688,27 @@ class HonchoSessionManager:
             logger.warning("life-host dialectic failed (non-fatal): %s", e)
             return ""
 
+    def _life_fetch_context(self, search_query: str | None = None) -> dict[str, Any]:
+        """Read-only representation/search against the LIFE host's user peer (metal via the
+        proxy). Returns {'representation':..., 'card':[...]} or empties. Powers federated
+        honcho_search/honcho_context. NEVER writes — only peer.context(). Config-gated."""
+        try:
+            from plugins.memory.honcho.client import get_life_client
+            lc = get_life_client()
+            if not lc:
+                return {"representation": "", "card": []}
+            client, cfg = lc
+            peer_name = cfg.get("peer") or "tony"
+            peer = client.peer(peer_name)
+            ctx = peer.context(search_query=search_query) if search_query is not None else peer.context()
+            rep = (getattr(ctx, "representation", None)
+                   or getattr(ctx, "peer_representation", None) or "")
+            card = self._normalize_card(getattr(ctx, "peer_card", None))
+            return {"representation": rep, "card": card}
+        except Exception as e:
+            logger.warning("life-host context failed (non-fatal): %s", e)
+            return {"representation": "", "card": []}
+
     def prefetch_context(self, session_key: str, user_message: str | None = None) -> None:
         """
         Fire get_prefetch_context in a background thread, caching the result.
@@ -1062,6 +1083,17 @@ class HonchoSessionManager:
                     for m in recent
                 ]
 
+            # Federation: fold the read-only LIFE host's representation/card in (read-down).
+            life = self._life_fetch_context()
+            life_parts = []
+            if life.get("representation"):
+                life_parts.append(life["representation"])
+            if life.get("card"):
+                life_parts.append("\n".join(f"- {f}" for f in life["card"]))
+            if life_parts:
+                base = result.get("representation", "")
+                result["representation"] = (base + "\n\n" if base else "") + "[life memory]\n" + "\n\n".join(life_parts)
+
             return result
         except Exception as e:
             logger.debug("Session context fetch failed: %s", e)
@@ -1168,6 +1200,15 @@ class HonchoSessionManager:
             card = ctx["card"] or []
             if card:
                 parts.append("\n".join(f"- {f}" for f in card))
+            # Federation: ALSO search the read-only LIFE host (work reads life, read-down).
+            life = self._life_fetch_context(search_query=query)
+            life_parts = []
+            if life.get("representation"):
+                life_parts.append(life["representation"])
+            if life.get("card"):
+                life_parts.append("\n".join(f"- {f}" for f in life["card"]))
+            if life_parts:
+                parts.append("[life memory]\n" + "\n\n".join(life_parts))
             return "\n\n".join(parts)
         except Exception as e:
             logger.debug("Honcho search_context failed: %s", e)
