@@ -658,9 +658,34 @@ class HonchoSessionManager:
             # Apply Hermes-side char cap before caching
             if result and self._dialectic_max_chars and len(result) > self._dialectic_max_chars:
                 result = result[:self._dialectic_max_chars].rsplit(" ", 1)[0] + " …"
+            # Federation: ALSO recall from the read-only LIFE host (work reads life,
+            # read-down). Read-only; failures never affect the work-store answer.
+            life = self._life_dialectic(query, level)
+            if life:
+                result = (result + "\n\n" if result else "") + "[life memory] " + life
             return result
         except Exception as e:
             logger.warning("Honcho dialectic query failed: %s", e)
+            return ""
+
+    def _life_dialectic(self, query: str, level: str) -> str:
+        """Read-only dialectic recall against the secondary LIFE host (metal, via the
+        read-only proxy). Returns '' if no life host is configured or on any error.
+        NEVER writes — only peer.chat(). Config-gated, so a no-op unless hosts.life set."""
+        try:
+            from plugins.memory.honcho.client import get_life_client
+            lc = get_life_client()
+            if not lc:
+                return ""
+            client, cfg = lc
+            peer_name = cfg.get("peer") or "tony"
+            ans = client.peer(peer_name).chat(query, reasoning_level=level) or ""
+            cap = self._dialectic_max_chars
+            if ans and cap and len(ans) > cap:
+                ans = ans[:cap].rsplit(" ", 1)[0] + " …"
+            return ans
+        except Exception as e:
+            logger.warning("life-host dialectic failed (non-fatal): %s", e)
             return ""
 
     def prefetch_context(self, session_key: str, user_message: str | None = None) -> None:

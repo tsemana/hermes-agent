@@ -774,6 +774,46 @@ def _refresh_cached_oauth(client: "Honcho", config: HonchoClientConfig | None) -
     except Exception:
         logger.warning("Honcho OAuth cached refresh failed", exc_info=True)
 
+# --- Read-only LIFE host (work-reads-life federation) ------------------------
+# Work Hermes reads life from the metal store via a SECOND, recall-ONLY client
+# pointed at the read-only proxy (:8010 -> metal :8000). Configured by a
+# `hosts.life` block in honcho.json, e.g.:
+#   "life": {"baseUrl": "http://127.0.0.1:8010", "apiKey": "<metal read key>",
+#            "workspace": "hermes-aegis", "peer": "tony", "recallOnly": true}
+# Used ONLY for peer.chat() dialectic recall — never for writes. The proxy
+# structurally blocks writes too (defense in depth). Returns (client, cfg) or None.
+# Absent block -> None -> zero behavior change (e.g. the metal agent never sets it).
+_life_client: Any = None
+_life_loaded: bool = False
+
+
+def get_life_client():
+    """Build (once) the read-only secondary 'life' Honcho client, or None."""
+    global _life_client, _life_loaded
+    if _life_loaded:
+        return _life_client
+    _life_loaded = True
+    try:
+        raw = json.loads(resolve_config_path().read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    life = (raw.get("hosts") or {}).get("life") or {}
+    base_url = life.get("baseUrl") or life.get("base_url")
+    if not base_url or life.get("enabled") is False:
+        return None
+    try:
+        from honcho import Honcho
+        client = Honcho(
+            api_key=life.get("apiKey"),
+            base_url=base_url,
+            workspace_id=life.get("workspace") or "hermes-aegis",
+        )
+        _life_client = (client, life)
+    except Exception as e:  # noqa
+        logger.warning("life host client init failed (non-fatal): %s", e)
+        _life_client = None
+    return _life_client
+
 
 def get_honcho_client(config: HonchoClientConfig | None = None) -> Honcho:
     """Get or create the Honcho client singleton.
