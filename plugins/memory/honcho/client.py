@@ -917,14 +917,17 @@ def get_honcho_client(config: HonchoClientConfig | None = None) -> Honcho:
             or "::1" in resolved_base_url
         )
         if _is_local:
-            # Check if the host block has its own apiKey (explicit local auth).
-            # Auth-skipping is loopback-only: a stored key is likely a cloud key
-            # that would break a no-auth local server, so we substitute the SDK's
-            # required-non-empty placeholder unless the host block opts in.
+            # Use a configured key for local auth. Honor a key set in the host
+            # block OR at the top level of honcho.json (config.api_key already
+            # resolves either). Only fall back to the "local" placeholder when no
+            # key is configured anywhere -- i.e. a genuine no-auth local server.
+            # (Previously this required the key to live inside the host block,
+            # which silently dropped a valid top-level apiKey and produced 401
+            # Invalid JWT against auth-required local instances.)
             _raw = config.raw or {}
             _host_block = (_raw.get("hosts") or {}).get(config.host, {})
-            _host_has_key = bool(_host_block.get("apiKey"))
-            effective_api_key = config.api_key if _host_has_key else "local"
+            _has_key = bool(_host_block.get("apiKey")) or bool(_raw.get("apiKey")) or bool(config.api_key)
+            effective_api_key = config.api_key if _has_key else "local"
         else:
             effective_api_key = config.api_key
 
