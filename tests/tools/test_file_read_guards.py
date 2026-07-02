@@ -24,6 +24,10 @@ from tools.file_tools import (
     _DEFAULT_MAX_READ_CHARS,
     _read_tracker,
     notify_other_tool_call,
+    clear_file_ops_cache,
+    _file_ops_lock,
+    _last_known_cwd,
+    _authoritative_workspace_root,
 )
 
 
@@ -219,6 +223,69 @@ class TestDevicePathBlocking(unittest.TestCase):
         self.assertIn("error", result)
         self.assertIn("device file", result["error"])
         mock_ops.assert_not_called()
+
+    @patch("tools.file_tools._get_file_ops")
+    def test_relative_device_alias_uses_terminal_cwd_over_stale_default_anchor(self, mock_ops):
+        """A non-default session must not inherit another session's last cwd.
+
+        File tools collapse non-isolated sessions onto the shared ``default``
+        terminal environment. If that shared env/last-known cwd is stale, a
+        relative read must still resolve against this session's explicit
+        TERMINAL_CWD before applying the device guard.
+        """
+        if not os.path.exists("/dev/stdin"):
+            self.skipTest("/dev/stdin is not available on this platform")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = os.path.join(tmpdir, "workspace")
+            stale_default = os.path.join(tmpdir, "stale-default")
+            os.mkdir(workspace)
+            os.mkdir(stale_default)
+            try:
+                os.symlink("/dev/stdin", os.path.join(workspace, "stdin-link"))
+            except OSError as exc:
+                self.skipTest(f"symlink unavailable: {exc}")
+
+            clear_file_ops_cache()
+            with _file_ops_lock:
+                _last_known_cwd.clear()
+                _last_known_cwd["default"] = stale_default
+
+            try:
+                with patch.dict(os.environ, {"TERMINAL_CWD": workspace}, clear=False):
+                    result = json.loads(read_file_tool("stdin-link", task_id="other-session"))
+            finally:
+                clear_file_ops_cache()
+                with _file_ops_lock:
+                    _last_known_cwd.clear()
+
+        self.assertIn("error", result)
+        self.assertIn("device file", result["error"])
+        mock_ops.assert_not_called()
+
+    def test_isolated_task_preserved_cwd_wins_over_global_terminal_cwd(self):
+        """Isolated task ids must not inherit the process/global TERMINAL_CWD."""
+        task_id = "isolated-task"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            global_cwd = os.path.join(tmpdir, "global")
+            isolated_cwd = os.path.join(tmpdir, "isolated")
+            os.mkdir(global_cwd)
+            os.mkdir(isolated_cwd)
+
+            clear_file_ops_cache()
+            with _file_ops_lock:
+                _last_known_cwd.clear()
+                _last_known_cwd[task_id] = isolated_cwd
+
+            try:
+                with patch("tools.terminal_tool._task_env_overrides", {task_id: {"env_type": "local"}}):
+                    with patch.dict(os.environ, {"TERMINAL_CWD": global_cwd}, clear=False):
+                        root = _authoritative_workspace_root(task_id)
+            finally:
+                clear_file_ops_cache()
+                with _file_ops_lock:
+                    _last_known_cwd.clear()
+
+        self.assertEqual(root, isolated_cwd)
 
 
 # ---------------------------------------------------------------------------

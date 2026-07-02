@@ -200,14 +200,34 @@ def _get_live_tracking_cwd(task_id: str = "default") -> str | None:
 
     with _file_ops_lock:
         cached = _file_ops_cache.get(container_key) or _file_ops_cache.get(task_id)
+    configured = _configured_terminal_cwd()
+
+    def _shared_default_cwd_belongs_to_another_session(env) -> bool:
+        """Avoid letting a stale shared-default env override this session cwd.
+
+        Non-default task/session ids collapse to the shared ``default`` terminal
+        env unless they request backend isolation. If that shared env is stamped
+        as ``default`` or has no owner, it may be leftover from an earlier
+        default-session file operation. When this session has an explicit
+        ``TERMINAL_CWD`` anchor, prefer falling through to that anchor instead
+        of treating the shared env as authoritative.
+        """
+        if not task_id or task_id == "default" or container_key == task_id:
+            return False
+        if not configured:
+            return False
+        owner = str(getattr(env, "cwd_owner", "") or "")
+        return owner in {"", "default"}
+
     if cached is not None:
         env = getattr(cached, "env", None)
-        live_cwd = _live_cwd_if_owned(env, task_id)
-        if live_cwd:
-            _remember_last_known_cwd(container_key, live_cwd)
-            return live_cwd
+        if not _shared_default_cwd_belongs_to_another_session(env):
+            live_cwd = _live_cwd_if_owned(env, task_id)
+            if live_cwd:
+                _remember_last_known_cwd(container_key, live_cwd)
+                return live_cwd
         # Legacy: a cache entry carrying its own cwd with no env to own it.
-        if env is None and getattr(cached, "cwd", None):
+        if env is None and getattr(cached, "cwd", None) and not configured:
             legacy_cwd = getattr(cached, "cwd", None)
             _remember_last_known_cwd(container_key, legacy_cwd)
             return legacy_cwd
@@ -217,10 +237,11 @@ def _get_live_tracking_cwd(task_id: str = "default") -> str | None:
 
         with _env_lock:
             env = _active_environments.get(container_key) or _active_environments.get(task_id)
-        live_cwd = _live_cwd_if_owned(env, task_id)
-        if live_cwd:
-            _remember_last_known_cwd(container_key, live_cwd)
-            return live_cwd
+        if not _shared_default_cwd_belongs_to_another_session(env):
+            live_cwd = _live_cwd_if_owned(env, task_id)
+            if live_cwd:
+                _remember_last_known_cwd(container_key, live_cwd)
+                return live_cwd
     except Exception:
         pass
 
@@ -253,6 +274,14 @@ def _authoritative_workspace_root(task_id: str = "default") -> str | None:
     registered = _registered_task_cwd_override(task_id)
     if registered:
         return registered
+    configured = _configured_terminal_cwd()
+    try:
+        from tools.terminal_tool import _resolve_container_task_id
+        container_key = _resolve_container_task_id(task_id)
+    except Exception:
+        container_key = task_id
+    if task_id and task_id != "default" and container_key != task_id and configured:
+        return configured
     # When the terminal env was cleaned up mid-conversation, the live cwd is
     # gone but the directory the agent navigated to is still recorded in the
     # durable _last_known_cwd registry. Prefer it over the config/process
@@ -260,10 +289,13 @@ def _authoritative_workspace_root(task_id: str = "default") -> str | None:
     # still lands in the user's directory (root cause of #26211: write happens
     # via _resolve_path_for_task -> here, which runs before _get_file_ops
     # rebuilds the env). Keyed by the resolved container id, same as the save.
+    # For non-default task/session ids, an explicit TERMINAL_CWD is a safer
+    # per-session anchor than the shared ``default`` last-known cwd, which may
+    # have been written by a different collapsed session.
     preserved = _last_known_cwd_for(task_id)
     if preserved:
         return preserved
-    return _configured_terminal_cwd()
+    return configured
 
 
 def _resolve_base_dir(task_id: str = "default") -> Path:
