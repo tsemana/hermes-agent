@@ -217,6 +217,21 @@ describe('workspaceCwdForNewSession', () => {
     expect(workspaceCwdForNewSession()).toBe('/home/user/configured')
   })
 
+  it('prefers the configured default over the remembered cwd in remote mode (hermes-custom fork)', () => {
+    $connection.set({ baseUrl: 'http://backend-a', mode: 'remote' } as never)
+    setCurrentCwd('/backend/last-viewed')
+    applyConfiguredDefaultProjectDir('/home/user/configured')
+
+    expect(workspaceCwdForNewSession()).toBe('/home/user/configured')
+
+    // Without a configured default the stock remembered-cwd behavior is intact.
+    // (applyConfiguredDefaultProjectDir seeded the live cwd while idle, so
+    // re-remember the session path after clearing it.)
+    applyConfiguredDefaultProjectDir(null)
+    setCurrentCwd('/backend/last-viewed')
+    expect(workspaceCwdForNewSession()).toBe('/backend/last-viewed')
+  })
+
   it('keeps remote workspace memory separate from local and other remotes', () => {
     window.localStorage.setItem('hermes.desktop.workspace-cwd', '/local/project')
     $currentCwd.set('/live/session/path')

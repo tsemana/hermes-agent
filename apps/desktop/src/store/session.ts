@@ -82,7 +82,12 @@ export async function ensureDefaultWorkspaceCwd(): Promise<void> {
   const remembered = getRememberedWorkspaceCwd()
 
   if ($connection.get()?.mode === 'remote') {
-    seedLiveCwd(remembered)
+    // Fork (hermes-custom): an explicit Settings default project dir wins over
+    // the per-connection remembered cwd, so every boot starts where the user
+    // pinned it instead of wherever the last-viewed session drifted. Skips
+    // sanitize() on purpose — that checks the LOCAL fs, which is the wrong
+    // filesystem for a remote backend (ours happens to be same-machine).
+    seedLiveCwd(configured || remembered)
 
     return
   }
@@ -340,7 +345,9 @@ export const setCurrentCwd = (next: Updater<string>) => {
 
 export const workspaceCwdForNewSession = (): string => {
   if ($connection.get()?.mode === 'remote') {
-    return getRememberedWorkspaceCwd()
+    // Fork (hermes-custom): same precedence as ensureDefaultWorkspaceCwd's
+    // remote branch — a pinned default project dir beats the remembered cwd.
+    return getConfiguredDefaultProjectDir() || getRememberedWorkspaceCwd()
   }
 
   // A bare new chat starts DETACHED — no inherited cwd, so the composer's coding
