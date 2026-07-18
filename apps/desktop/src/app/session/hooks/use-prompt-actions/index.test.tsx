@@ -274,6 +274,33 @@ describe('usePromptActions slash.exec dispatch payloads', () => {
   })
 })
 
+describe('usePromptActions /reload-skills', () => {
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+  })
+
+  it('reloads the live gateway skill catalog without using slash.exec', async () => {
+    const requestGateway = vi.fn(async (method: string) => {
+      if (method === 'skills.reload') {
+        return { output: 'Reloading skills...\n68 skill(s) available' } as never
+      }
+
+      return {} as never
+    })
+
+    let handle: HarnessHandle | null = null
+    render(
+      <Harness onReady={h => (handle = h)} refreshSessions={async () => undefined} requestGateway={requestGateway} />
+    )
+
+    await handle!.submitText('/reload-skills')
+
+    expect(requestGateway).toHaveBeenCalledWith('skills.reload')
+    expect(requestGateway).not.toHaveBeenCalledWith('slash.exec', expect.anything())
+  })
+})
+
 describe('usePromptActions desktop slash pickers', () => {
   beforeEach(() => {
     setSessions(() => [sessionInfo({ id: '20260610_120000_abcdef', title: 'Loaded session' })])

@@ -8,6 +8,7 @@ const toggleSkill = vi.fn()
 const toggleToolset = vi.fn()
 const getToolsetConfig = vi.fn()
 const selectToolsetProvider = vi.fn()
+const requestGateway = vi.fn()
 
 vi.mock('@/hermes', () => ({
   getSkills: () => getSkills(),
@@ -19,6 +20,10 @@ vi.mock('@/hermes', () => ({
   deleteEnvVar: vi.fn(),
   revealEnvVar: vi.fn(),
   setEnvVar: vi.fn()
+}))
+
+vi.mock('@/app/gateway/hooks/use-gateway-request', () => ({
+  useGatewayRequest: () => ({ requestGateway })
 }))
 
 // Notifications hit nanostores/timers we don't care about here.
@@ -55,6 +60,7 @@ beforeEach(() => {
   getToolsets.mockResolvedValue([toolset()])
   toggleToolset.mockResolvedValue({ ok: true, name: 'web', enabled: false })
   getToolsetConfig.mockResolvedValue({ has_category: false, active_provider: null, providers: [] })
+  requestGateway.mockResolvedValue({ output: 'Reloading skills...\n68 skill(s) available' })
 })
 
 afterEach(() => {
@@ -63,6 +69,21 @@ afterEach(() => {
 })
 
 describe('SkillsView toolset management', () => {
+  it('rescans skills before refreshing the displayed capabilities', async () => {
+    await renderSkills()
+    const refresh = await screen.findByRole('button', { name: 'Refresh skills' })
+
+    expect(requestGateway).not.toHaveBeenCalled()
+    requestGateway.mockClear()
+    getSkills.mockClear()
+    getToolsets.mockClear()
+    fireEvent.click(refresh)
+
+    await waitFor(() => expect(requestGateway).toHaveBeenCalledWith('skills.reload'))
+    expect(requestGateway.mock.invocationCallOrder[0]).toBeLessThan(getSkills.mock.invocationCallOrder[0])
+    expect(requestGateway.mock.invocationCallOrder[0]).toBeLessThan(getToolsets.mock.invocationCallOrder[0])
+  })
+
   it('renders a switch for each toolset and toggles it off', async () => {
     await renderSkills()
 

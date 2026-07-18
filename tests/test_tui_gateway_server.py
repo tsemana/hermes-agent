@@ -4229,6 +4229,30 @@ def test_commands_catalog_surfaces_quick_commands(monkeypatch):
     assert resp["result"]["canon"]["/notes"] == "/notes"
 
 
+def test_commands_catalog_includes_skills_in_categorized_output(monkeypatch):
+    monkeypatch.setattr(
+        "agent.skill_commands.scan_skill_commands",
+        lambda: {
+            "/alpha-skill": {"description": "Alpha workflow"},
+            "/beta-skill": {"description": "Beta workflow"},
+        },
+    )
+
+    resp = server.handle_request(
+        {"id": "1", "method": "commands.catalog", "params": {}}
+    )
+
+    skills_cat = next(
+        c for c in resp["result"]["categories"] if c["name"] == "Skills"
+    )
+
+    assert dict(skills_cat["pairs"]) == {
+        "/alpha-skill": "Alpha workflow",
+        "/beta-skill": "Beta workflow",
+    }
+    assert resp["result"]["skill_count"] == 2
+
+
 def test_commands_catalog_includes_tui_mouse_command():
     resp = server.handle_request(
         {"id": "1", "method": "commands.catalog", "params": {}}

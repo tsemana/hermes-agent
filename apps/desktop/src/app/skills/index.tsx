@@ -1,6 +1,7 @@
 import type * as React from 'react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
+import { useGatewayRequest } from '@/app/gateway/hooks/use-gateway-request'
 import { PageLoader } from '@/components/page-loader'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -80,6 +81,7 @@ interface SkillsViewProps extends React.ComponentProps<'section'> {
 
 export function SkillsView({ setStatusbarItemGroup: _setStatusbarItemGroup, ...props }: SkillsViewProps) {
   const { t } = useI18n()
+  const { requestGateway } = useGatewayRequest()
   const [mode, setMode] = useRouteEnumParam('tab', SKILLS_MODES, 'skills')
 
   const [query, setQuery] = useState('')
@@ -91,19 +93,24 @@ export function SkillsView({ setStatusbarItemGroup: _setStatusbarItemGroup, ...p
   const [savingToolset, setSavingToolset] = useState<string | null>(null)
   const [expandedToolset, setExpandedToolset] = useState<string | null>(null)
 
+  const loadCapabilities = useCallback(async () => {
+    const [nextSkills, nextToolsets] = await Promise.all([getSkills(), getToolsets()])
+    setSkills(nextSkills)
+    setToolsets(nextToolsets)
+  }, [])
+
   const refreshCapabilities = useCallback(async () => {
     setRefreshing(true)
 
     try {
-      const [nextSkills, nextToolsets] = await Promise.all([getSkills(), getToolsets()])
-      setSkills(nextSkills)
-      setToolsets(nextToolsets)
+      await requestGateway('skills.reload')
+      await loadCapabilities()
     } catch (err) {
       notifyError(err, t.skills.skillsLoadFailed)
     } finally {
       setRefreshing(false)
     }
-  }, [t])
+  }, [loadCapabilities, requestGateway, t])
 
   const refreshToolsets = useCallback(() => {
     getToolsets()
@@ -114,8 +121,11 @@ export function SkillsView({ setStatusbarItemGroup: _setStatusbarItemGroup, ...p
   useRefreshHotkey(refreshCapabilities)
 
   useEffect(() => {
-    void refreshCapabilities()
-  }, [refreshCapabilities])
+    setRefreshing(true)
+    void loadCapabilities()
+      .catch(err => notifyError(err, t.skills.skillsLoadFailed))
+      .finally(() => setRefreshing(false))
+  }, [loadCapabilities, t])
 
   const categories = useMemo(() => {
     if (!skills) {

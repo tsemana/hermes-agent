@@ -52,6 +52,13 @@ describe('desktop slash command curation', () => {
     expect(desktopSlashUnavailableMessage('/personality')).toBeNull()
   })
 
+  it('surfaces /reload-skills as a desktop action', () => {
+    expect(isDesktopSlashSuggestion('/reload-skills')).toBe(true)
+    expect(isDesktopSlashCommand('/reload-skills')).toBe(true)
+    expect(desktopSlashUnavailableMessage('/reload-skills')).toBeNull()
+    expect(resolveDesktopCommand('/reload-skills')?.surface).toEqual({ kind: 'action', action: 'reload-skills' })
+  })
+
   it('routes /pet through the desktop action handler and drops /pets', () => {
     expect(resolveDesktopCommand('/pet')?.surface).toEqual({ kind: 'action', action: 'pet' })
     expect(resolveDesktopCommand('/pet')?.args).toBe(true)

@@ -371,6 +371,20 @@ export function useSlashCommand(deps: SlashCommandDeps) {
             renderSlashOutput(`error: ${err instanceof Error ? err.message : String(err)}`)
           }
         },
+        'reload-skills': async ctx => {
+          const resolved = await withSlashOutput(ctx)
+
+          if (!resolved) {
+            return
+          }
+
+          try {
+            const result = await requestGateway<{ output?: string }>('skills.reload')
+            resolved.render(result?.output || 'Skills reloaded.')
+          } catch (err) {
+            resolved.render(`error: ${err instanceof Error ? err.message : String(err)}`)
+          }
+        },
         help: async ctx => {
           const resolved = await withSlashOutput(ctx)
 

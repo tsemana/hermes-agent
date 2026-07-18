@@ -37,6 +37,7 @@ export type DesktopActionId =
   | 'new'
   | 'pet'
   | 'profile'
+  | 'reload-skills'
   | 'skin'
   | 'title'
   | 'yolo'
@@ -115,6 +116,12 @@ const DESKTOP_COMMAND_SPECS: readonly DesktopCommandSpec[] = [
   { name: '/profile', description: 'Switch the active Hermes profile', surface: action('profile') },
   { name: '/skin', description: 'Switch desktop theme or cycle to the next one', surface: action('skin'), args: true },
   { name: '/title', description: 'Rename the current session', surface: action('title') },
+  {
+    name: '/reload-skills',
+    description: 'Rescan installed skills and refresh slash commands',
+    aliases: ['/reload_skills'],
+    surface: action('reload-skills')
+  },
   { name: '/help', description: 'Show desktop slash commands', aliases: ['/commands'], surface: action('help') },
   {
     name: '/browser',
@@ -170,8 +177,7 @@ const DESKTOP_COMMAND_SPECS: readonly DesktopCommandSpec[] = [
   { name: '/version', description: 'Show Hermes Agent version', surface: exec() },
 
   // No desktop surface, but carry an alias (underscore spelling variants).
-  { name: '/reload-mcp', aliases: ['/reload_mcp'], surface: unavailable('advanced') },
-  { name: '/reload-skills', aliases: ['/reload_skills'], surface: unavailable('advanced') }
+  { name: '/reload-mcp', aliases: ['/reload_mcp'], surface: unavailable('advanced') }
 ]
 
 // Known commands with no desktop surface (and no alias) — a flat name list
