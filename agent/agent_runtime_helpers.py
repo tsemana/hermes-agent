@@ -1130,6 +1130,11 @@ def restore_primary_runtime(agent) -> bool:
         agent.provider = rt["provider"]
         agent.base_url = rt["base_url"]           # setter updates _base_url_lower
         agent.api_mode = rt["api_mode"]
+        # Fallback activation may have replaced this with the fallback
+        # provider's pool. Restore pool identity before re-selection; using
+        # the fallback pool here can silently rewrite base_url after the core
+        # primary fields above were restored.
+        agent._credential_pool = rt.get("credential_pool")
         if hasattr(agent, "_transport_cache"):
             agent._transport_cache.clear()
         agent.api_key = rt["api_key"]
@@ -1211,6 +1216,9 @@ def restore_primary_runtime(agent) -> bool:
         logger.info(
             "Primary runtime restored for new turn: %s (%s)",
             agent.model, agent.provider,
+        )
+        agent._emit_status(
+            f"Primary model restored: {agent.model} ({agent.provider})"
         )
         return True
     except Exception as e:
@@ -1888,6 +1896,7 @@ def switch_model(agent, new_model, new_provider, api_key='', base_url='', api_mo
         "base_url": agent.base_url,
         "api_mode": agent.api_mode,
         "api_key": getattr(agent, "api_key", ""),
+        "credential_pool": getattr(agent, "_credential_pool", None),
         "client_kwargs": dict(agent._client_kwargs),
         "use_prompt_caching": agent._use_prompt_caching,
         "use_native_cache_layout": agent._use_native_cache_layout,

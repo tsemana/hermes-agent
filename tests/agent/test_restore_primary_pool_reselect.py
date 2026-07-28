@@ -90,6 +90,7 @@ class TestRestorePrimaryPoolReselect:
             "base_url": "https://chatgpt.com/backend-api/codex",
             "api_mode": "codex_responses",
             "api_key": "original-key-entry-1",
+            "credential_pool": pool,
             "client_kwargs": {
                 "api_key": "original-key-entry-1",
                 "base_url": "https://chatgpt.com/backend-api/codex",
@@ -108,6 +109,7 @@ class TestRestorePrimaryPoolReselect:
         agent._create_openai_client = MagicMock(return_value=MagicMock())
         agent._apply_client_headers_for_base_url = MagicMock()
         agent._replace_primary_openai_client = MagicMock(return_value=True)
+        agent._emit_status = MagicMock()
 
         return agent
 
@@ -220,3 +222,33 @@ class TestRestorePrimaryPoolReselect:
         assert result is True
         assert "custom-endpoint.example.com" in agent.base_url
         assert "custom-endpoint.example.com" in agent._client_kwargs["base_url"]
+
+    def test_restore_replaces_fallback_pool_before_reselect(self):
+        """Restore must not let the fallback pool rewrite the primary endpoint."""
+        primary_pool = _build_mock_pool([
+            {
+                **_make_entry("primary", "primary-key", priority=0),
+                "base_url": "https://primary.example.com/v1",
+            },
+        ])
+        fallback_pool = _build_mock_pool([
+            {
+                **_make_entry("fallback", "fallback-key", priority=0),
+                "base_url": "https://fallback.example.com/v1",
+            },
+        ])
+        fallback_pool.provider = "custom:local-mlx"
+
+        agent = self._make_agent(primary_pool)
+        setattr(agent, "_credential_pool", fallback_pool)
+        agent.base_url = "https://fallback.example.com/v1"
+
+        assert agent._restore_primary_runtime() is True
+        assert getattr(agent, "_credential_pool") is primary_pool
+        assert agent.base_url == "https://primary.example.com/v1"
+        assert agent.api_key == "primary-key"
+        emit_status = agent._emit_status
+        assert isinstance(emit_status, MagicMock)
+        emit_status.assert_called_once_with(
+            "Primary model restored: gpt-5.5 (openai-codex)"
+        )

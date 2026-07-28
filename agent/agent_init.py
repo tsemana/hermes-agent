@@ -1883,6 +1883,11 @@ def init_agent(
         "base_url": agent.base_url,
         "api_mode": agent.api_mode,
         "api_key": getattr(agent, "api_key", ""),
+        # Fallback activation may detach the primary pool and attach the
+        # fallback provider's pool. Keep the original object so restoration
+        # cannot re-select a fallback credential and rewrite the restored
+        # primary endpoint back to the fallback base URL.
+        "credential_pool": getattr(agent, "_credential_pool", None),
         "client_kwargs": dict(agent._client_kwargs),
         "use_prompt_caching": agent._use_prompt_caching,
         "use_native_cache_layout": agent._use_native_cache_layout,
