@@ -929,3 +929,88 @@ def test_project_promotion_beacon_is_checked_before_writing(tmp_path):
     assert "no _vault-identity.md" in result["error"]
     note = work_vault / "memory" / "projects" / "fusionleap-ws1-data-architecture.md"
     assert "should not be written" not in note.read_text(encoding="utf-8")
+
+
+# ── Slices 4/5: routing a queued candidate, and dual-vault reads ────────────
+
+
+def test_review_can_route_a_candidate_queued_without_a_vault(tmp_path):
+    engine, life_vault, work_vault = _started_engine(tmp_path, with_work_vault=True)
+    engine.handle_tool_call(
+        "lifeos_promote_to_task", {"content": "Draft the WS1 gate", "target": "FusionLeap WS1", "vault": "life"}
+    )
+    # Simulate a candidate queued before Slice 2 existed.
+    engine.state["promotion_candidates"][0].pop("vault")
+
+    reviewed = json.loads(
+        engine.handle_tool_call(
+            "lifeos_review_promotion_candidate", {"index": 0, "action": "approve", "vault": "work"}
+        )
+    )["candidate"]
+    applied = json.loads(engine.handle_tool_call("lifeos_apply_promotion_candidate", {"index": 0}))["applied"]
+
+    assert reviewed["vault"] == "work"
+    assert Path(applied["destination"]).is_relative_to(work_vault / "tasks")
+
+
+def test_review_rejects_an_invalid_vault_label(tmp_path):
+    engine, _, _ = _started_engine(tmp_path, with_work_vault=True)
+    engine.handle_tool_call("lifeos_promote_to_task", {"content": "x", "vault": "life"})
+
+    result = json.loads(
+        engine.handle_tool_call(
+            "lifeos_review_promotion_candidate", {"index": 0, "action": "approve", "vault": "nowhere"}
+        )
+    )
+
+    assert "unknown vault" in result["error"]
+    assert engine.state["promotion_candidates"][0]["vault"] == "life"
+
+
+def test_base_context_includes_workos_tasks(tmp_path):
+    life_vault = _build_vault(tmp_path)
+    work_vault = _build_work_vault(tmp_path)
+    _write(
+        work_vault / "tasks" / "ws1-ingestion-gate.md",
+        _sample_task("Close the WS1 ingestion gate", project="FusionLeap WS1", due="2026-04-16"),
+    )
+    hermes_home = _build_hermes_home(tmp_path, life_vault, work_vault)
+    engine = LifeOSContextEngine()
+    engine.on_session_start("sess-tasks", hermes_home=str(hermes_home), platform="cli", model="gpt-test")
+
+    tasks = engine._load_tasks()
+    titles = {t["title"]: t["vault"] for t in tasks}
+
+    assert titles.get("Close the WS1 ingestion gate") == "work"
+    assert titles.get("Review budget") == "life"
+
+
+def test_snapshot_labels_the_vault_only_when_two_are_configured(tmp_path):
+    life_vault = _build_vault(tmp_path)
+    work_vault = _build_work_vault(tmp_path)
+    _write(
+        work_vault / "tasks" / "ws1-ingestion-gate.md",
+        _sample_task("Close the WS1 ingestion gate", project="FusionLeap WS1", due="2026-04-16"),
+    )
+
+    dual = LifeOSContextEngine()
+    dual.on_session_start("dual", hermes_home=str(_build_hermes_home(tmp_path, life_vault, work_vault)),
+                          platform="cli", model="gpt-test")
+    assert "(work;" in dual._render_operational_snapshot(max_tasks=8)
+
+    solo_home = _build_hermes_home(tmp_path / "solo", life_vault)
+    solo = LifeOSContextEngine()
+    solo.on_session_start("solo", hermes_home=str(solo_home), platform="cli", model="gpt-test")
+    snapshot = solo._render_operational_snapshot(max_tasks=8)
+    assert "(life;" not in snapshot and "(work;" not in snapshot
+
+
+def test_engine_is_available_with_only_a_work_vault(tmp_path):
+    work_vault = _build_work_vault(tmp_path)
+    missing_life = tmp_path / "no-such-life-vault"
+    hermes_home = _build_hermes_home(tmp_path, missing_life, work_vault)
+
+    engine = LifeOSContextEngine()
+    engine.on_session_start("work-only", hermes_home=str(hermes_home), platform="cli", model="gpt-test")
+
+    assert engine.is_available()

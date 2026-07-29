@@ -102,7 +102,9 @@ class LifeOSContextEngine(ContextCompressor):
         return "lifeos"
 
     def is_available(self) -> bool:
-        return self.vault_path.exists()
+        # Available when EITHER root exists. Gating on the life vault alone
+        # disabled the whole engine for a work-only install.
+        return any(root.exists() for root in self._vault_roots().values() if root is not None)
 
     def on_session_start(self, session_id: str, **kwargs) -> None:
         self.session_id = session_id or ""
@@ -372,7 +374,15 @@ class LifeOSContextEngine(ContextCompressor):
                     "type": "object",
                     "properties": {
                         "index": {"type": "integer", "description": "Zero-based index in promotion_candidates."},
-                        "action": {"type": "string", "enum": ["approve", "reject", "pending"], "description": "Review action to apply."}
+                        "action": {"type": "string", "enum": ["approve", "reject", "pending"], "description": "Review action to apply."},
+                        "vault": {
+                            **self._vault_param(),
+                            "description": (
+                                "Optional. Sets or corrects the destination vault on a "
+                                "queued candidate — use it to route a candidate that was "
+                                "queued without one, rather than re-capturing it."
+                            ),
+                        },
                     },
                     "required": ["index", "action"],
                     "additionalProperties": False,
@@ -718,6 +728,13 @@ class LifeOSContextEngine(ContextCompressor):
             raise ValueError("action must be one of: approve, reject, pending")
         candidates[index]["status"] = mapping[action]
         candidates[index]["reviewed_at"] = _utc_now_iso()
+        # Lets a candidate queued without a vault be routed at review time
+        # instead of being re-captured. Validated here so a bad label is caught
+        # at review rather than at apply.
+        vault = str(args.get("vault") or "").strip().lower()
+        if vault:
+            self._resolve_vault(vault)
+            candidates[index]["vault"] = vault
         self._save_state()
         return candidates[index]
 
@@ -781,6 +798,9 @@ class LifeOSContextEngine(ContextCompressor):
             lines.append("- Active tasks:")
             for task in tasks[:max_tasks]:
                 suffix_parts = []
+                # Only worth showing when there is more than one vault to be in.
+                if task.get("vault") and self.work_vault_path is not None:
+                    suffix_parts.append(str(task["vault"]))
                 if task.get("priority"):
                     suffix_parts.append(task["priority"])
                 if task.get("due"):
@@ -868,7 +888,23 @@ class LifeOSContextEngine(ContextCompressor):
         return "\n".join(lines)
 
     def _load_tasks(self) -> List[Dict[str, Any]]:
-        return self._load_tasks_from_vault(self.vault_path)
+        """Active tasks from every configured vault, tagged with their source.
+
+        Base context showed LifeOS tasks only while ``_rebuild_indexes`` had
+        already gone dual-vault, so WorkOS tasks were invisible in the
+        operational snapshot even when their project note was in context.
+        """
+        tasks: List[Dict[str, Any]] = []
+        for label, root in self._vault_roots().items():
+            if root is None:
+                continue
+            if label != "life" and root == self.vault_path:
+                continue  # same root configured twice
+            for task in self._load_tasks_from_vault(root):
+                task["vault"] = label
+                tasks.append(task)
+        tasks.sort(key=self._task_sort_key)
+        return tasks
 
     def _load_tasks_for_note(self, note: VaultNote) -> List[Dict[str, Any]]:
         for vault_path in (self.vault_path, self.work_vault_path):
