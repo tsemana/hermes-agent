@@ -73,7 +73,6 @@ class LifeOSContextEngine(ContextCompressor):
         self.max_block_chars = 5000
         self.max_project_chars = 1200
         self.max_people_chars = 900
-        self.max_claude_chars = 1200
         self.max_daily_chars = 900
         self.max_task_count = 8
         self.refresh_minutes = {
@@ -344,18 +343,6 @@ class LifeOSContextEngine(ContextCompressor):
                 },
             },
             {
-                "name": "lifeos_promote_to_claude",
-                "description": "Write selected context directly into CLAUDE.md under a session-promoted section.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "content": {"type": "string", "description": "Text to append to CLAUDE.md."}
-                    },
-                    "required": ["content"],
-                    "additionalProperties": False,
-                },
-            },
-            {
                 "name": "lifeos_apply_promotion_candidate",
                 "description": "Apply a queued promotion candidate to its LifeOS destination when supported.",
                 "parameters": {
@@ -424,9 +411,6 @@ class LifeOSContextEngine(ContextCompressor):
                     str((args or {}).get("content") or "").strip(),
                     vault=(args or {}).get("vault"),
                 )
-                return json.dumps({"ok": True, **details}, ensure_ascii=False)
-            if name == "lifeos_promote_to_claude":
-                details = self._write_to_claude(str((args or {}).get("content") or "").strip())
                 return json.dumps({"ok": True, **details}, ensure_ascii=False)
             if name == "lifeos_apply_promotion_candidate":
                 details = self._apply_promotion_candidate(args or {})
@@ -665,13 +649,6 @@ class LifeOSContextEngine(ContextCompressor):
         self._append_section_block(path, "Session Promoted Context", content)
         return {"path": str(path), "content": content, "vault": label}
 
-    def _write_to_claude(self, content: str) -> Dict[str, Any]:
-        if not content:
-            raise ValueError("content is required")
-        path = self._get_claude_path(create_if_missing=True)
-        self._append_section_block(path, "Session Promoted Context", content)
-        return {"path": str(path), "content": content}
-
     def _apply_promotion_candidate(self, args: Dict[str, Any]) -> Dict[str, Any]:
         candidates = self.state.setdefault("promotion_candidates", [])
         try:
@@ -778,9 +755,6 @@ class LifeOSContextEngine(ContextCompressor):
         if not force and not self._is_stale("base"):
             return
         base_blocks = [self._render_operational_snapshot(max_tasks=self.max_task_count)]
-        claude_block = self._render_claude_block()
-        if claude_block:
-            base_blocks.append(claude_block)
         daily_block = self._render_daily_block()
         if daily_block:
             base_blocks.append(daily_block)
@@ -823,14 +797,6 @@ class LifeOSContextEngine(ContextCompressor):
                 lines.append("- Active projects: " + ", ".join(deduped[:4]))
         return "\n".join(lines)
 
-    def _render_claude_block(self) -> str:
-        candidates = [self.vault_path / "CLAUDE.md", self.vault_path / "Daily Control Center" / "CLAUDE.md"]
-        for path in candidates:
-            if path.exists():
-                text = _trim_text(_strip_markdown_noise(path.read_text(encoding="utf-8")), self.max_claude_chars)
-                if text:
-                    return f"## Command Center Memory\n{text}"
-        return ""
 
     def _render_daily_block(self) -> str:
         daily_dir = self.vault_path / "daily"
@@ -1058,13 +1024,6 @@ class LifeOSContextEngine(ContextCompressor):
         path = daily_dir / today_name
         if create_if_missing and not path.exists():
             path.write_text(f"# {today_name[:-3]}\n", encoding="utf-8")
-        return path
-
-    def _get_claude_path(self, create_if_missing: bool = False) -> Path:
-        path = self.vault_path / "CLAUDE.md"
-        if create_if_missing and not path.exists():
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text("# Memory\n", encoding="utf-8")
         return path
 
     def _append_section_block(self, path: Path, heading: str, content: str) -> None:

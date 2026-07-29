@@ -247,7 +247,7 @@ def test_lifeos_engine_reset_clears_overlay_state(tmp_path):
     assert status["promotion_candidates"] == []
 
 
-def test_lifeos_engine_writes_promoted_context_to_daily_and_claude(tmp_path):
+def test_lifeos_engine_writes_promoted_context_to_daily(tmp_path):
     vault = _build_vault(tmp_path)
     hermes_home = _build_hermes_home(tmp_path, vault)
     today = datetime.now().strftime("%Y-%m-%d")
@@ -256,17 +256,36 @@ def test_lifeos_engine_writes_promoted_context_to_daily_and_claude(tmp_path):
     engine.on_session_start("sess-5", hermes_home=str(hermes_home), platform="cli", model="gpt-test")
 
     daily = json.loads(engine.handle_tool_call("lifeos_promote_to_daily", {"content": "Focus on Phoenix budget with Todd"}))
-    claude = json.loads(engine.handle_tool_call("lifeos_promote_to_claude", {"content": "Current immediate focus: Phoenix budget review"}))
 
     daily_text = (vault / "daily" / f"{today}.md").read_text(encoding="utf-8")
-    claude_text = (vault / "CLAUDE.md").read_text(encoding="utf-8")
 
     assert daily["ok"] is True
-    assert claude["ok"] is True
     assert "Session Promoted Context" in daily_text
     assert "Focus on Phoenix budget with Todd" in daily_text
-    assert "Session Promoted Context" in claude_text
-    assert "Current immediate focus: Phoenix budget review" in claude_text
+
+
+def test_engine_neither_writes_nor_reads_vault_claude_md(tmp_path):
+    """Claude does not run out of the vaults, so the engine ignores CLAUDE.md.
+
+    The fixture vault ships a root CLAUDE.md; it must not reach base context,
+    and no tool may create or append to one.
+    """
+    vault = _build_vault(tmp_path)
+    hermes_home = _build_hermes_home(tmp_path, vault)
+    before = (vault / "CLAUDE.md").read_text(encoding="utf-8")
+
+    engine = LifeOSContextEngine()
+    engine.on_session_start("sess-no-claude", hermes_home=str(hermes_home), platform="cli", model="gpt-test")
+
+    assert "lifeos_promote_to_claude" not in {s["name"] for s in engine.get_tool_schemas()}
+
+    result = json.loads(engine.handle_tool_call("lifeos_promote_to_claude", {"content": "nope"}))
+    assert "error" in result or result.get("ok") is not True
+    assert (vault / "CLAUDE.md").read_text(encoding="utf-8") == before
+
+    engine._refresh_base_context(force=True)
+    assert "Command Center Memory" not in engine.state["pinned_blocks"]["base"]
+    assert "Ship Phoenix and close the budget loop" not in engine.state["pinned_blocks"]["base"]
 
 
 def test_lifeos_engine_can_apply_project_promotion_candidate(tmp_path):
