@@ -44,19 +44,37 @@ def _build_vault(tmp_path: Path) -> Path:
     return vault
 
 
-def _build_hermes_home(tmp_path: Path, vault: Path) -> Path:
+def _build_hermes_home(tmp_path: Path, vault: Path, work_vault: Path | None = None) -> Path:
     home = tmp_path / ".hermes"
     home.mkdir(parents=True, exist_ok=True)
     cfg = {
         "context": {"engine": "lifeos"},
         "lifeos_context": {
             "vault_path": str(vault),
+            **({"work_vault_path": str(work_vault)} if work_vault else {}),
             "max_block_chars": 5000,
             "refresh": {"base_minutes": 20, "projects_minutes": 20, "people_minutes": 20},
         },
     }
     (home / "config.yaml").write_text(yaml.safe_dump(cfg), encoding="utf-8")
     return home
+
+
+def _build_work_vault(tmp_path: Path) -> Path:
+    vault = tmp_path / "WorkOS"
+    _write(
+        vault / "memory" / "projects" / "fusionleap-ws1-data-architecture.md",
+        "---\ntitle: FusionLeap WS1 — Data Architecture Modernization\naliases:\n"
+        "  - FusionLeap WS1\n  - FusionLeap Workstream 1\ntags:\n  - vetsource\n---\n"
+        "# FusionLeap WS1 — Data Architecture Modernization\n\n"
+        "Vetsource work project for governed Kafka and Snowflake ingestion.\n",
+    )
+    _write(
+        vault / "memory" / "people" / "jared-scarbrough.md",
+        "---\ntitle: Jared Scarbrough\naliases:\n  - Jared\ntags:\n  - vetsource\n---\n"
+        "# Jared Scarbrough\n\nTony's Vetsource sponsor and manager.\n",
+    )
+    return vault
 
 
 def test_lifeos_engine_prefetches_project_context(tmp_path):
@@ -68,10 +86,67 @@ def test_lifeos_engine_prefetches_project_context(tmp_path):
 
     text = engine.prefetch("what's next on Phoenix?")
 
-    assert "LIFEOS CONTEXT" in text
+    assert "LIFEOS + WORKOS CONTEXT" in text
     assert "Project — Phoenix" in text
     assert "Review budget" in text
     assert engine.state["active_projects"] == ["Phoenix"]
+
+
+def test_lifeos_engine_routes_work_project_refresh_to_workos(tmp_path):
+    life_vault = _build_vault(tmp_path)
+    work_vault = _build_work_vault(tmp_path)
+    hermes_home = _build_hermes_home(tmp_path, life_vault, work_vault)
+
+    engine = LifeOSContextEngine()
+    engine.on_session_start("sess-work-project", hermes_home=str(hermes_home), platform="cli", model="gpt-test")
+
+    refresh = json.loads(
+        engine.handle_tool_call(
+            "lifeos_refresh_context",
+            {"scope": "project", "target": "FusionLeap WS1"},
+        )
+    )
+
+    assert "Project — FusionLeap WS1 — Data Architecture Modernization" in refresh["preview"]
+    assert "Vetsource work project" in refresh["preview"]
+    assert refresh["status"]["vault_paths"] == {
+        "lifeos": str(life_vault),
+        "workos": str(work_vault),
+    }
+
+
+def test_lifeos_engine_routes_people_across_lifeos_and_workos(tmp_path):
+    life_vault = _build_vault(tmp_path)
+    work_vault = _build_work_vault(tmp_path)
+    hermes_home = _build_hermes_home(tmp_path, life_vault, work_vault)
+
+    engine = LifeOSContextEngine()
+    engine.on_session_start("sess-people-routing", hermes_home=str(hermes_home), platform="cli", model="gpt-test")
+
+    life_person = json.loads(
+        engine.handle_tool_call("lifeos_refresh_context", {"scope": "person", "target": "Todd"})
+    )
+    work_person = json.loads(
+        engine.handle_tool_call("lifeos_refresh_context", {"scope": "person", "target": "Jared"})
+    )
+
+    assert "Primary finance counterpart" in life_person["preview"]
+    assert "Vetsource sponsor and manager" in work_person["preview"]
+
+
+def test_lifeos_engine_prefetches_workos_project_on_normal_turn(tmp_path):
+    life_vault = _build_vault(tmp_path)
+    work_vault = _build_work_vault(tmp_path)
+    hermes_home = _build_hermes_home(tmp_path, life_vault, work_vault)
+
+    engine = LifeOSContextEngine()
+    engine.on_session_start("sess-work-prefetch", hermes_home=str(hermes_home), platform="cli", model="gpt-test")
+
+    text = engine.prefetch("What are the open loops for FusionLeap WS1?")
+
+    assert "LIFEOS + WORKOS CONTEXT" in text
+    assert "FusionLeap WS1 — Data Architecture Modernization" in text
+    assert "Vetsource work project" in text
 
 
 def test_lifeos_engine_tools_report_and_update_focus(tmp_path):

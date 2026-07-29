@@ -16,8 +16,8 @@ from agent.context_compressor import ContextCompressor
 logger = logging.getLogger(__name__)
 
 _CONTEXT_HEADER = (
-    "[LIFEOS CONTEXT — REFERENCE ONLY] This is structured operating context from "
-    "Tony's LifeOS vault. Use it as current background context. Prefer the latest "
+    "[LIFEOS + WORKOS CONTEXT — REFERENCE ONLY] This is structured operating context from "
+    "Tony's separate LifeOS and WorkOS vaults. Use it as current background context. Prefer the latest "
     "user request if anything conflicts."
 )
 
@@ -62,6 +62,7 @@ class LifeOSContextEngine(ContextCompressor):
         self.vault_path = Path(
             os.getenv("OBSIDIAN_VAULT_PATH", "~/Documents/Obsidian Vault")
         ).expanduser()
+        self.work_vault_path: Optional[Path] = None
         self.state_path = Path(self.hermes_home) / "context" / "lifeos_state.json"
         self.max_block_chars = 5000
         self.max_project_chars = 1200
@@ -183,7 +184,7 @@ class LifeOSContextEngine(ContextCompressor):
             },
             {
                 "name": "lifeos_refresh_context",
-                "description": "Refresh cached LifeOS context from the vault. Optionally target a project or person.",
+                "description": "Refresh cached context from LifeOS and WorkOS. Optionally target a project or person.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -371,6 +372,10 @@ class LifeOSContextEngine(ContextCompressor):
             "engine": self.name,
             "vault_path": str(self.vault_path),
             "vault_available": self.is_available(),
+            "vault_paths": {
+                "lifeos": str(self.vault_path),
+                "workos": str(self.work_vault_path) if self.work_vault_path else "",
+            },
             "session_id": self.session_id,
             "current_focus": self.state.get("current_focus", ""),
             "active_projects": self.state.get("active_projects", []),
@@ -419,6 +424,12 @@ class LifeOSContextEngine(ContextCompressor):
             or str(self.vault_path)
         )
         self.vault_path = Path(vault_value).expanduser()
+        work_vault_value = (
+            life_cfg.get("work_vault_path")
+            or os.getenv("WORKOS_CONTEXT_VAULT_PATH")
+            or ""
+        )
+        self.work_vault_path = Path(work_vault_value).expanduser() if work_vault_value else None
         self.max_block_chars = _safe_int(life_cfg.get("max_block_chars"), self.max_block_chars)
         self.max_task_count = _safe_int(life_cfg.get("max_task_count"), self.max_task_count)
         refresh_cfg = life_cfg.get("refresh", {}) if isinstance(life_cfg, dict) else {}
@@ -561,8 +572,14 @@ class LifeOSContextEngine(ContextCompressor):
         return candidates[index]
 
     def _rebuild_indexes(self) -> None:
-        self._project_notes = self._load_note_index(self.vault_path / "memory" / "projects")
-        self._people_notes = self._load_note_index(self.vault_path / "memory" / "people")
+        vault_paths = [self.vault_path]
+        if self.work_vault_path and self.work_vault_path != self.vault_path:
+            vault_paths.append(self.work_vault_path)
+        self._project_notes = []
+        self._people_notes = []
+        for vault_path in vault_paths:
+            self._project_notes.extend(self._load_note_index(vault_path / "memory" / "projects"))
+            self._people_notes.extend(self._load_note_index(vault_path / "memory" / "people"))
 
     def _load_note_index(self, directory: Path) -> List[VaultNote]:
         if not directory.exists():
@@ -668,7 +685,11 @@ class LifeOSContextEngine(ContextCompressor):
 
     def _render_project_bundle(self, note: VaultNote) -> str:
         summary = _trim_text(_strip_markdown_noise(note.body), self.max_project_chars)
-        related_tasks = [task for task in self._load_tasks() if self._same_topic(task.get("project", ""), note.title, note.stem)]
+        related_tasks = [
+            task
+            for task in self._load_tasks_for_note(note)
+            if self._same_topic(task.get("project", ""), note.title, note.stem)
+        ]
         lines = [f"## Project — {note.title}"]
         if summary:
             lines.append(summary)
@@ -682,7 +703,7 @@ class LifeOSContextEngine(ContextCompressor):
     def _render_person_bundle(self, note: VaultNote) -> str:
         summary = _trim_text(_strip_markdown_noise(note.body), self.max_people_chars)
         related_tasks = []
-        for task in self._load_tasks():
+        for task in self._load_tasks_for_note(note):
             who = f"{task.get('assigned_to', '')} {task.get('waiting_on', '')}".strip()
             if who and self._same_topic(who, note.title, note.stem):
                 related_tasks.append(task)
@@ -697,7 +718,16 @@ class LifeOSContextEngine(ContextCompressor):
         return "\n".join(lines)
 
     def _load_tasks(self) -> List[Dict[str, Any]]:
-        tasks_dir = self.vault_path / "tasks"
+        return self._load_tasks_from_vault(self.vault_path)
+
+    def _load_tasks_for_note(self, note: VaultNote) -> List[Dict[str, Any]]:
+        for vault_path in (self.vault_path, self.work_vault_path):
+            if vault_path and note.path.is_relative_to(vault_path):
+                return self._load_tasks_from_vault(vault_path)
+        return []
+
+    def _load_tasks_from_vault(self, vault_path: Path) -> List[Dict[str, Any]]:
+        tasks_dir = vault_path / "tasks"
         if not tasks_dir.exists():
             return []
         tasks: List[Dict[str, Any]] = []
