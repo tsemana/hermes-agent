@@ -1014,3 +1014,76 @@ def test_engine_is_available_with_only_a_work_vault(tmp_path):
     engine.on_session_start("work-only", hermes_home=str(hermes_home), platform="cli", model="gpt-test")
 
     assert engine.is_available()
+
+
+# ── Task ranking: deadlines first, then priority, pooled across vaults ──────
+
+
+def test_dated_tasks_outrank_undated_regardless_of_priority(tmp_path):
+    life_vault = _build_vault(tmp_path)
+    work_vault = _build_work_vault(tmp_path)
+    _write(work_vault / "tasks" / "urgent-no-date.md", _sample_task("Undated but high", due=""))
+    _write(work_vault / "tasks" / "low-with-date.md",
+           _sample_task("Low but due soon", due="2026-04-10"))
+    (work_vault / "tasks" / "low-with-date.md").write_text(
+        (work_vault / "tasks" / "low-with-date.md").read_text(encoding="utf-8")
+        .replace("priority: high", "priority: low"), encoding="utf-8")
+    hermes_home = _build_hermes_home(tmp_path, life_vault, work_vault)
+    engine = LifeOSContextEngine()
+    engine.on_session_start("rank", hermes_home=str(hermes_home), platform="cli", model="gpt-test")
+
+    titles = [t["title"] for t in engine._load_tasks()]
+
+    # A low-priority task with a deadline beats a high-priority one without.
+    assert titles.index("Low but due soon") < titles.index("Undated but high")
+
+
+def test_dated_tasks_are_ordered_earliest_first(tmp_path):
+    life_vault = _build_vault(tmp_path)
+    work_vault = _build_work_vault(tmp_path)
+    _write(work_vault / "tasks" / "later.md", _sample_task("Later deadline", due="2026-09-01"))
+    _write(work_vault / "tasks" / "sooner.md", _sample_task("Sooner deadline", due="2026-05-01"))
+    hermes_home = _build_hermes_home(tmp_path, life_vault, work_vault)
+    engine = LifeOSContextEngine()
+    engine.on_session_start("rank2", hermes_home=str(hermes_home), platform="cli", model="gpt-test")
+
+    titles = [t["title"] for t in engine._load_tasks()]
+
+    assert titles.index("Sooner deadline") < titles.index("Later deadline")
+
+
+def test_undated_tasks_fall_back_to_priority(tmp_path):
+    life_vault = _build_vault(tmp_path)
+    work_vault = _build_work_vault(tmp_path)
+    for name, prio in (("aaa-low", "low"), ("zzz-high", "high")):
+        _write(work_vault / "tasks" / f"{name}.md",
+               _sample_task(name, due="").replace("priority: high", f"priority: {prio}"))
+    hermes_home = _build_hermes_home(tmp_path, life_vault, work_vault)
+    engine = LifeOSContextEngine()
+    engine.on_session_start("rank3", hermes_home=str(hermes_home), platform="cli", model="gpt-test")
+
+    titles = [t["title"] for t in engine._load_tasks()]
+
+    # Priority wins over the alphabetical tiebreak among undated tasks.
+    assert titles.index("zzz-high") < titles.index("aaa-low")
+
+
+def test_ranking_pools_both_vaults_and_allows_a_lopsided_mix(tmp_path):
+    """No per-vault reservation — the top N is whatever ranks highest overall."""
+    life_vault = _build_vault(tmp_path)
+    work_vault = _build_work_vault(tmp_path)
+    for i in range(4):
+        _write(work_vault / "tasks" / f"work-due-{i}.md",
+               _sample_task(f"Work deadline {i}", due=f"2026-05-0{i+1}"))
+    hermes_home = _build_hermes_home(tmp_path, life_vault, work_vault)
+    engine = LifeOSContextEngine()
+    engine.on_session_start("rank4", hermes_home=str(hermes_home), platform="cli", model="gpt-test")
+
+    top4 = engine._load_tasks()[:4]
+
+    # The life fixture task is due 2026-04-17, ahead of every work deadline
+    # here, so it takes slot 1 purely on date. Nothing is reserved per vault:
+    # the remaining three go to work, and a 1/3 split is a valid outcome.
+    assert [t["vault"] for t in top4] == ["life", "work", "work", "work"]
+    assert top4[0]["title"] == "Review budget"
+    assert [t["title"] for t in top4[1:]] == [f"Work deadline {i}" for i in range(3)]

@@ -949,11 +949,20 @@ class LifeOSContextEngine(ContextCompressor):
         return tasks
 
     def _task_sort_key(self, task: Dict[str, Any]) -> tuple:
-        due_key = task.get("due") or "9999-12-31"
+        """Rank: status, then anything with a deadline, then priority.
+
+        Priority used to outrank the due date, so a high-priority task with no
+        deadline sat above one that was weeks overdue. Committed dates now come
+        first and are ordered earliest-first; undated work falls back to
+        priority. Tasks are ranked across every vault together — the mix is
+        allowed to be lopsided rather than reserving slots per vault.
+        """
+        due = task.get("due") or ""
         return (
             _STATUS_RANK.get(task.get("status", "active"), 50),
+            0 if due else 1,
+            due or "9999-12-31",
             _PRIORITY_RANK.get(task.get("priority", "medium"), 50),
-            due_key,
             task.get("title", ""),
         )
 
