@@ -777,3 +777,77 @@ def test_task_candidate_applies_to_the_vault_recorded_on_the_candidate(tmp_path)
     assert applied["vault"] == "work"
     assert Path(applied["destination"]).is_relative_to(work_vault / "tasks")
     assert not (life_vault / "tasks" / "draft-the-ws1-ingestion-gate.md").exists()
+
+
+# ── Slice 2: the `vault` tool parameter ─────────────────────────────────────
+
+
+def _schema(engine, name: str) -> dict:
+    return next(s for s in engine.get_tool_schemas() if s["name"] == name)
+
+
+def test_vault_is_required_on_write_tools_when_two_vaults_configured(tmp_path):
+    engine, _, _ = _started_engine(tmp_path, with_work_vault=True)
+
+    for name in ("lifeos_promote_to_daily", "lifeos_promote_to_task"):
+        params = _schema(engine, name)["parameters"]
+        assert "vault" in params["required"], name
+        assert params["properties"]["vault"]["enum"] == ["life", "work"], name
+
+    # Project promotion derives the vault from the matched note, so the
+    # parameter stays optional there and is only used to disambiguate.
+    project = _schema(engine, "lifeos_promote_to_project")["parameters"]
+    assert "vault" in project["properties"]
+    assert "vault" not in project["required"]
+
+
+def test_vault_is_not_required_when_only_one_vault_is_configured(tmp_path):
+    engine, _, _ = _started_engine(tmp_path, with_work_vault=False)
+
+    params = _schema(engine, "lifeos_promote_to_daily")["parameters"]
+    assert params["required"] == ["content"]
+    assert params["properties"]["vault"]["enum"] == ["life"]
+
+
+def test_tool_schemas_see_the_work_vault_before_session_start(tmp_path):
+    """get_tool_schemas() runs before on_session_start() in agent_init.
+
+    Without resolving config here the requirement would silently vanish for
+    every install whose HERMES_HOME is not the default.
+    """
+    life_vault = _build_vault(tmp_path)
+    work_vault = _build_work_vault(tmp_path)
+    hermes_home = _build_hermes_home(tmp_path, life_vault, work_vault)
+
+    with patch.dict("os.environ", {"HERMES_HOME": str(hermes_home)}):
+        engine = LifeOSContextEngine()  # no on_session_start
+        params = _schema(engine, "lifeos_promote_to_daily")["parameters"]
+
+    assert "vault" in params["required"]
+
+
+def test_task_promotion_routes_end_to_end_without_touching_state(tmp_path):
+    engine, life_vault, work_vault = _started_engine(tmp_path, with_work_vault=True)
+
+    engine.handle_tool_call(
+        "lifeos_promote_to_task",
+        {"content": "Draft the WS1 ingestion gate", "target": "FusionLeap WS1", "vault": "work"},
+    )
+    applied = json.loads(engine.handle_tool_call("lifeos_apply_promotion_candidate", {"index": 0}))["applied"]
+
+    assert applied["vault"] == "work"
+    assert Path(applied["destination"]).is_relative_to(work_vault / "tasks")
+    assert not (life_vault / "tasks" / "draft-the-ws1-ingestion-gate.md").exists()
+
+
+def test_capture_update_records_the_vault_for_later_promotion(tmp_path):
+    engine, _, _ = _started_engine(tmp_path, with_work_vault=True)
+
+    captured = json.loads(
+        engine.handle_tool_call(
+            "lifeos_capture_update",
+            {"type": "decision", "content": "SyncVet raw landing not approved", "vault": "work"},
+        )
+    )["tentative_update"]
+
+    assert captured["vault"] == "work"

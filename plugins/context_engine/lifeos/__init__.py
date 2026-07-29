@@ -57,7 +57,13 @@ class LifeOSContextEngine(ContextCompressor):
             quiet_mode=True,
             config_context_length=200_000,
         )
-        self.hermes_home = os.path.expanduser("~/.hermes")
+        # Honour HERMES_HOME. ``on_session_start`` overrides this from kwargs,
+        # but ``get_tool_schemas`` runs BEFORE that hook (agent_init.py builds
+        # the tool list first), so a hardcoded ~/.hermes made every non-default
+        # install read the wrong config at schema-build time — which would
+        # silently drop the vault requirement for exactly the two-vault homes
+        # that need it.
+        self.hermes_home = os.getenv("HERMES_HOME") or os.path.expanduser("~/.hermes")
         self.session_id = ""
         self.vault_path = Path(
             os.getenv("OBSIDIAN_VAULT_PATH", "~/Documents/Obsidian Vault")
@@ -175,7 +181,44 @@ class LifeOSContextEngine(ContextCompressor):
         joined = _trim_text("\n\n".join(blocks), self.max_block_chars)
         return f"{_CONTEXT_HEADER}\n\n{joined}" if joined else ""
 
+    def _vault_param(self) -> Dict[str, Any]:
+        """The ``vault`` property, worded for whichever vaults are configured."""
+        if self.work_vault_path is None:
+            return {
+                "type": "string",
+                "enum": ["life"],
+                "description": "Destination vault. Only 'life' is configured; may be omitted.",
+            }
+        return {
+            "type": "string",
+            "enum": list(self._VAULT_LABELS),
+            "description": (
+                "Destination vault — REQUIRED, choose per item, there is no default. "
+                f"'work' = WorkOS ({self.work_vault_path}): Vetsource projects, "
+                "decisions, implementation gates, tasks and work context. "
+                f"'life' = LifeOS ({self.vault_path}): personal, family, "
+                "consulting, learning and dojo material."
+            ),
+        }
+
+    def _required_with_vault(self, *base: str) -> List[str]:
+        """Build ``required`` per home — JSON Schema cannot express a condition.
+
+        ``_resolve_vault`` enforces the same rule regardless; this only tells the
+        model what to send.
+        """
+        required = list(base)
+        if self.work_vault_path is not None:
+            required.append("vault")
+        return required
+
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
+        # Whether `vault` is required depends on config, and this runs before
+        # on_session_start, so resolve config here rather than trusting init.
+        try:
+            self._load_runtime_config()
+        except Exception as exc:
+            logger.debug("LifeOS could not load config for tool schemas: %s", exc)
         return [
             {
                 "name": "lifeos_context_status",
@@ -223,6 +266,13 @@ class LifeOSContextEngine(ContextCompressor):
                         "target": {"type": "string", "description": "Optional related project, person, or topic."},
                         "content": {"type": "string", "description": "The tentative update text to store in the session overlay."},
                         "confidence": {"type": "string", "enum": ["low", "medium", "high"], "description": "Confidence in the update. Default: medium."},
+                        "vault": {
+                            **self._vault_param(),
+                            "description": (
+                                "Optional. Records which vault this update belongs to so a "
+                                "promotion derived from it inherits the routing."
+                            ),
+                        },
                     },
                     "required": ["content"],
                     "additionalProperties": False,
@@ -230,13 +280,21 @@ class LifeOSContextEngine(ContextCompressor):
             },
             {
                 "name": "lifeos_promote_to_project",
-                "description": "Queue a promotion candidate for a LifeOS project note without writing it yet.",
+                "description": "Queue a promotion candidate for a LifeOS or WorkOS project note without writing it yet.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "target": {"type": "string", "description": "Project name or identifier."},
                         "content": {"type": "string", "description": "Operational update to potentially write into the project note."},
                         "why": {"type": "string", "description": "Why this should be promoted."},
+                        "vault": {
+                            **self._vault_param(),
+                            "description": (
+                                "Optional. The vault is normally taken from the matched "
+                                "project note; supply it only to disambiguate a project "
+                                "name that exists in both vaults."
+                            ),
+                        },
                     },
                     "required": ["content"],
                     "additionalProperties": False,
@@ -244,15 +302,16 @@ class LifeOSContextEngine(ContextCompressor):
             },
             {
                 "name": "lifeos_promote_to_task",
-                "description": "Queue a promotion candidate for a new or updated task without writing it yet.",
+                "description": "Queue a promotion candidate for a new or updated task without writing it yet. The vault is recorded now and used when the candidate is applied.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "target": {"type": "string", "description": "Optional related project or task grouping."},
                         "content": {"type": "string", "description": "Task text or update to promote later."},
                         "why": {"type": "string", "description": "Why this should become a task candidate."},
+                        "vault": self._vault_param(),
                     },
-                    "required": ["content"],
+                    "required": self._required_with_vault("content"),
                     "additionalProperties": False,
                 },
             },
@@ -271,13 +330,14 @@ class LifeOSContextEngine(ContextCompressor):
             },
             {
                 "name": "lifeos_promote_to_daily",
-                "description": "Write selected context directly into today's daily note under a session-promoted section.",
+                "description": "Write selected context directly into today's daily note in the named vault, under a session-promoted section.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "content": {"type": "string", "description": "Text to append to today's daily note."}
+                        "content": {"type": "string", "description": "Text to append to today's daily note."},
+                        "vault": self._vault_param(),
                     },
-                    "required": ["content"],
+                    "required": self._required_with_vault("content"),
                     "additionalProperties": False,
                 },
             },
@@ -483,6 +543,9 @@ class LifeOSContextEngine(ContextCompressor):
             "confidence": str(args.get("confidence") or "medium").strip().lower() or "medium",
             "created_at": _utc_now_iso(),
         }
+        vault = str(args.get("vault") or "").strip().lower()
+        if vault:
+            entry["vault"] = vault
         self.state.setdefault("tentative_updates", []).append(entry)
         self.state["tentative_updates"] = self.state["tentative_updates"][-20:]
         self._save_state()
@@ -497,6 +560,11 @@ class LifeOSContextEngine(ContextCompressor):
             "status": "pending",
             "created_at": _utc_now_iso(),
         }
+        # Recorded at queue time so apply routes to the vault the agent chose
+        # while it still had the context that justified the choice.
+        vault = str(args.get("vault") or "").strip().lower()
+        if vault:
+            entry["vault"] = vault
         self.state.setdefault("promotion_candidates", []).append(entry)
         self.state["promotion_candidates"] = self.state["promotion_candidates"][-20:]
         self._save_state()
