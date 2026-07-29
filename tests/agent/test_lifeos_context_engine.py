@@ -851,3 +851,81 @@ def test_capture_update_records_the_vault_for_later_promotion(tmp_path):
     )["tentative_update"]
 
     assert captured["vault"] == "work"
+
+
+# ── Slice 3: cross-vault project disambiguation ─────────────────────────────
+
+
+def _add_project(vault: Path, slug: str, title: str, body: str) -> None:
+    _write(
+        vault / "memory" / "projects" / f"{slug}.md",
+        f"---\ntitle: {title}\n---\n# {title}\n\n{body}\n",
+    )
+
+
+def _queue_project(engine, target: str, content: str, vault: str | None = None) -> None:
+    args = {"target": target, "content": content}
+    if vault:
+        args["vault"] = vault
+    engine.handle_tool_call("lifeos_promote_to_project", args)
+
+
+def test_project_promotion_records_the_vault_it_wrote_to(tmp_path):
+    engine, _, work_vault = _started_engine(tmp_path, with_work_vault=True)
+    _queue_project(engine, "FusionLeap WS1", "Schema governance accepted with caveats")
+
+    applied = json.loads(engine.handle_tool_call("lifeos_apply_promotion_candidate", {"index": 0}))["applied"]
+
+    assert applied["vault"] == "work"
+    assert Path(applied["destination"]).is_relative_to(work_vault)
+
+
+def test_same_project_name_in_both_vaults_refuses_to_guess(tmp_path):
+    """The merged index means a duplicated name would otherwise resolve by sort order."""
+    engine, life_vault, work_vault = _started_engine(tmp_path, with_work_vault=True)
+    _add_project(life_vault, "atlas", "Atlas", "Personal Atlas reading project.")
+    _add_project(work_vault, "atlas", "Atlas", "Vetsource Atlas migration.")
+    engine._rebuild_indexes()
+
+    _queue_project(engine, "Atlas", "decision that must not land in the wrong vault")
+    result = json.loads(engine.handle_tool_call("lifeos_apply_promotion_candidate", {"index": 0}))
+
+    assert "more than one vault" in result["error"]
+    for vault in (life_vault, work_vault):
+        assert "must not land" not in (vault / "memory" / "projects" / "atlas.md").read_text(encoding="utf-8")
+
+
+def test_vault_argument_disambiguates_a_duplicated_project_name(tmp_path):
+    engine, life_vault, work_vault = _started_engine(tmp_path, with_work_vault=True)
+    _add_project(life_vault, "atlas", "Atlas", "Personal Atlas reading project.")
+    _add_project(work_vault, "atlas", "Atlas", "Vetsource Atlas migration.")
+    engine._rebuild_indexes()
+
+    _queue_project(engine, "Atlas", "Vetsource-only decision", vault="work")
+    applied = json.loads(engine.handle_tool_call("lifeos_apply_promotion_candidate", {"index": 0}))["applied"]
+
+    assert applied["vault"] == "work"
+    assert "Vetsource-only decision" in (work_vault / "memory" / "projects" / "atlas.md").read_text(encoding="utf-8")
+    assert "Vetsource-only decision" not in (life_vault / "memory" / "projects" / "atlas.md").read_text(encoding="utf-8")
+
+
+def test_vault_argument_naming_a_vault_without_the_project_raises(tmp_path):
+    engine, _, _ = _started_engine(tmp_path, with_work_vault=True)
+    _queue_project(engine, "FusionLeap WS1", "work-only project", vault="life")
+
+    result = json.loads(engine.handle_tool_call("lifeos_apply_promotion_candidate", {"index": 0}))
+
+    assert "no project note matching" in result["error"]
+
+
+def test_project_promotion_beacon_is_checked_before_writing(tmp_path):
+    """Project writes target the note's own path, so they need an explicit check."""
+    engine, _, work_vault = _started_engine(tmp_path, with_work_vault=True)
+    _queue_project(engine, "FusionLeap WS1", "should not be written")
+    (work_vault / "_vault-identity.md").unlink()
+
+    result = json.loads(engine.handle_tool_call("lifeos_apply_promotion_candidate", {"index": 0}))
+
+    assert "no _vault-identity.md" in result["error"]
+    note = work_vault / "memory" / "projects" / "fusionleap-ws1-data-architecture.md"
+    assert "should not be written" not in note.read_text(encoding="utf-8")

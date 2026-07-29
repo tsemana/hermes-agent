@@ -680,13 +680,12 @@ class LifeOSContextEngine(ContextCompressor):
             raise ValueError("rejected promotion candidates cannot be applied")
 
         if candidate_type == "lifeos_project":
-            project_note = self._find_project_note(target)
-            if not project_note:
-                raise ValueError(f"project note not found for target: {target}")
+            project_note = self._select_project_note(target, candidate.get("vault"))
             self._append_section_block(project_note.path, "Session Promoted Context", content)
             candidate["status"] = "applied"
             candidate["applied_at"] = _utc_now_iso()
             candidate["destination"] = str(project_note.path)
+            candidate["vault"] = self._vault_label_for_path(project_note.path)
         elif candidate_type == "lifeos_task":
             label, root = self._resolve_vault(candidate.get("vault"))
             task_path = self._create_task_candidate_note(content, target, root)
@@ -944,12 +943,68 @@ class LifeOSContextEngine(ContextCompressor):
                 matches.append(note)
         return matches
 
-    def _find_project_note(self, target: str) -> Optional[VaultNote]:
+    def _vault_label_for_path(self, path: Path) -> Optional[str]:
+        """Which configured vault contains *path*, by containment.
+
+        The note's path is already authoritative, so VaultNote carries no vault
+        field. Same approach as ``_load_tasks_for_note``.
+        """
+        for label, root in self._vault_roots().items():
+            if root is not None and path.is_relative_to(root):
+                return label
+        return None
+
+    def _find_project_notes(self, target: str) -> List[VaultNote]:
+        """All project notes matching *target*, best match first."""
         normalized = _normalize_phrase(target)
         if not normalized:
-            return None
-        matches = self._match_notes(normalized, self._project_notes)
+            return []
+        return self._match_notes(normalized, self._project_notes)
+
+    def _find_project_note(self, target: str) -> Optional[VaultNote]:
+        matches = self._find_project_notes(target)
         return matches[0] if matches else None
+
+    def _select_project_note(self, target: str, vault: Optional[str] = None) -> VaultNote:
+        """Pick the project note to write to, refusing to guess across vaults.
+
+        Since ``_rebuild_indexes`` merges both vaults into one index, a name
+        present in each would otherwise resolve to whichever sorted first — a
+        silent cross-vault write. Ambiguity raises and names the candidates.
+        """
+        matches = self._find_project_notes(target)
+        if not matches:
+            raise ValueError(f"project note not found for target: {target}")
+
+        if vault:
+            _, root = self._resolve_vault(vault)
+            matches = [n for n in matches if n.path.is_relative_to(root)]
+            if not matches:
+                raise ValueError(
+                    f"no project note matching {target!r} in the {vault!r} vault"
+                )
+
+        labels = {self._vault_label_for_path(n.path) for n in matches}
+        if len(labels) > 1:
+            listing = "; ".join(
+                f"{self._vault_label_for_path(n.path)}: {n.path}" for n in matches
+            )
+            raise ValueError(
+                f"project {target!r} matches notes in more than one vault — pass "
+                f"`vault` to choose. Candidates: {listing}"
+            )
+
+        label = labels.pop()
+        if label is None:
+            raise ValueError(
+                f"project note {matches[0].path} lies outside every configured "
+                "vault root; refusing to write"
+            )
+        # Project writes target the note's own path rather than a resolved root,
+        # so run the beacon check explicitly — otherwise this is the one write
+        # path that skips verification.
+        self._resolve_vault(label)
+        return matches[0]
 
     def _get_daily_note_path(self, root: Path, create_if_missing: bool = False) -> Path:
         daily_dir = root / "daily"
