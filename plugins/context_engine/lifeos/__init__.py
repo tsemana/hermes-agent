@@ -350,7 +350,10 @@ class LifeOSContextEngine(ContextCompressor):
                 entry = self._queue_promotion_candidate("honcho_user", args or {})
                 return json.dumps({"ok": True, "promotion_candidate": entry}, ensure_ascii=False)
             if name == "lifeos_promote_to_daily":
-                details = self._write_to_daily(str((args or {}).get("content") or "").strip())
+                details = self._write_to_daily(
+                    str((args or {}).get("content") or "").strip(),
+                    vault=(args or {}).get("vault"),
+                )
                 return json.dumps({"ok": True, **details}, ensure_ascii=False)
             if name == "lifeos_promote_to_claude":
                 details = self._write_to_claude(str((args or {}).get("content") or "").strip())
@@ -499,12 +502,90 @@ class LifeOSContextEngine(ContextCompressor):
         self._save_state()
         return entry
 
-    def _write_to_daily(self, content: str) -> Dict[str, Any]:
+    # ── Vault routing ────────────────────────────────────────────────────
+    #
+    # Writes state their destination vault. A silent default is only safe when
+    # there is exactly one place to write, so the label is required once
+    # ``work_vault_path`` is configured and optional otherwise. Every resolved
+    # root is checked against its beacon before it is handed to a writer.
+    # See LIFEOS-VAULT-ROUTING-PLAN.md in the hermes-nonwork-sandbox repo.
+
+    _VAULT_LABELS = ("life", "work")
+
+    def _vault_roots(self) -> Dict[str, Optional[Path]]:
+        return {"life": self.vault_path, "work": self.work_vault_path}
+
+    def _read_vault_beacon(self, root: Path) -> str:
+        """Return the vault label declared by ``<root>/_vault-identity.md``.
+
+        Compares the frontmatter ``vault:`` key, not the verification nonce.
+        The nonce exists so a *model* can prove it actually read the file
+        (VAULT-BEACON-CHECK.md); pinning code to it would break every write the
+        moment a beacon is rotated. The frontmatter is stable and machine
+        readable.
+        """
+        beacon = root / "_vault-identity.md"
+        if not beacon.is_file():
+            raise ValueError(
+                f"no _vault-identity.md at {root}; refusing to write to an "
+                "unverified vault root"
+            )
+        try:
+            frontmatter, _ = _parse_frontmatter(beacon.read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise ValueError(f"could not read vault beacon {beacon}: {exc}") from exc
+        declared = str((frontmatter or {}).get("vault") or "").strip().lower()
+        if not declared:
+            raise ValueError(f"vault beacon {beacon} declares no `vault:` key")
+        return declared
+
+    def _resolve_vault(self, vault: Optional[str] = None) -> tuple[str, Path]:
+        """Resolve a vault label to a beacon-verified root.
+
+        Returns ``(label, root)``. Fails closed on every ambiguity — an unknown
+        label, an omitted label in a two-vault home, a missing or unparseable
+        beacon, or a beacon that disagrees with the label all raise, and nothing
+        is written.
+        """
+        roots = self._vault_roots()
+        label = (vault or "").strip().lower()
+
+        if not label:
+            if roots["work"] is not None:
+                raise ValueError(
+                    "vault is required when a work vault is configured; pass "
+                    f"one of {list(self._VAULT_LABELS)}"
+                )
+            label = "life"
+
+        if label not in self._VAULT_LABELS:
+            raise ValueError(
+                f"unknown vault {vault!r}; expected one of {list(self._VAULT_LABELS)}"
+            )
+
+        root = roots[label]
+        if root is None:
+            raise ValueError(
+                f"vault {label!r} is not configured; set lifeos_context.work_vault_path"
+            )
+        if not root.is_dir():
+            raise ValueError(f"vault {label!r} root does not exist: {root}")
+
+        declared = self._read_vault_beacon(root)
+        if declared != label:
+            raise ValueError(
+                f"vault beacon mismatch: asked for {label!r} but {root} declares "
+                f"{declared!r}; refusing to write"
+            )
+        return label, root
+
+    def _write_to_daily(self, content: str, vault: Optional[str] = None) -> Dict[str, Any]:
         if not content:
             raise ValueError("content is required")
-        path = self._get_daily_note_path(create_if_missing=True)
+        label, root = self._resolve_vault(vault)
+        path = self._get_daily_note_path(root, create_if_missing=True)
         self._append_section_block(path, "Session Promoted Context", content)
-        return {"path": str(path), "content": content}
+        return {"path": str(path), "content": content, "vault": label}
 
     def _write_to_claude(self, content: str) -> Dict[str, Any]:
         if not content:
@@ -539,10 +620,12 @@ class LifeOSContextEngine(ContextCompressor):
             candidate["applied_at"] = _utc_now_iso()
             candidate["destination"] = str(project_note.path)
         elif candidate_type == "lifeos_task":
-            task_path = self._create_task_candidate_note(content, target)
+            label, root = self._resolve_vault(candidate.get("vault"))
+            task_path = self._create_task_candidate_note(content, target, root)
             candidate["status"] = "applied"
             candidate["applied_at"] = _utc_now_iso()
             candidate["destination"] = str(task_path)
+            candidate["vault"] = label
         elif candidate_type == "honcho_user":
             self._apply_honcho_conclusion(content)
             candidate["status"] = "applied"
@@ -800,8 +883,8 @@ class LifeOSContextEngine(ContextCompressor):
         matches = self._match_notes(normalized, self._project_notes)
         return matches[0] if matches else None
 
-    def _get_daily_note_path(self, create_if_missing: bool = False) -> Path:
-        daily_dir = self.vault_path / "daily"
+    def _get_daily_note_path(self, root: Path, create_if_missing: bool = False) -> Path:
+        daily_dir = root / "daily"
         daily_dir.mkdir(parents=True, exist_ok=True)
         today_name = datetime.now().strftime("%Y-%m-%d") + ".md"
         path = daily_dir / today_name
@@ -830,8 +913,8 @@ class LifeOSContextEngine(ContextCompressor):
             updated = existing.rstrip() + f"{spacer}\n{block}"
         path.write_text(updated, encoding="utf-8")
 
-    def _create_task_candidate_note(self, content: str, target: str) -> Path:
-        tasks_dir = self.vault_path / "tasks"
+    def _create_task_candidate_note(self, content: str, target: str, root: Path) -> Path:
+        tasks_dir = root / "tasks"
         tasks_dir.mkdir(parents=True, exist_ok=True)
         title = content.strip().splitlines()[0].strip()
         slug = _slugify(title) or f"task-{datetime.now().strftime('%Y%m%d%H%M%S')}"

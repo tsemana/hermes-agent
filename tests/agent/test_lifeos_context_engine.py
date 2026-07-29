@@ -33,9 +33,23 @@ def _sample_task(title: str, project: str = "", assigned_to: str = "", due: str 
     )
 
 
+def _write_beacon(vault: Path, label: str) -> None:
+    """Mirror the real ``_vault-identity.md`` beacons.
+
+    Writes refuse to touch a root whose beacon is missing or disagrees, so every
+    fixture vault needs one. See VAULT-BEACON-CHECK.md.
+    """
+    _write(
+        vault / "_vault-identity.md",
+        f"---\nvault: {label}\nmanaged_by: test fixture\n---\n\n"
+        f"# Vault identity: {label.upper()}\n",
+    )
+
+
 def _build_vault(tmp_path: Path) -> Path:
     vault = tmp_path / "LifeOS"
     today = datetime.now().strftime("%Y-%m-%d")
+    _write_beacon(vault, "life")
     _write(vault / "CLAUDE.md", "# Memory\n\n## Focus\nShip Phoenix and close the budget loop.\n")
     _write(vault / "daily" / f"{today}.md", "# Daily\n\nToday: Phoenix work, budget review, and Todd follow-up.\n")
     _write(vault / "tasks" / "review-budget.md", _sample_task("Review budget", project="Phoenix", assigned_to="Todd Martinez"))
@@ -62,6 +76,7 @@ def _build_hermes_home(tmp_path: Path, vault: Path, work_vault: Path | None = No
 
 def _build_work_vault(tmp_path: Path) -> Path:
     vault = tmp_path / "WorkOS"
+    _write_beacon(vault, "work")
     _write(
         vault / "memory" / "projects" / "fusionleap-ws1-data-architecture.md",
         "---\ntitle: FusionLeap WS1 — Data Architecture Modernization\naliases:\n"
@@ -619,3 +634,146 @@ def test_run_agent_routes_context_engine_tool_call_end_to_end(tmp_path):
 
     assert result["final_response"] == "Done"
     assert engine.tool_calls == [{"name": "lifeos_test_tool", "args": {}}]
+
+
+# ── Slice 1: vault write-routing (LIFEOS-VAULT-ROUTING-PLAN.md) ──────────────
+#
+# Writes name their destination vault and every resolved root is checked
+# against its beacon first. These tests pin the fail-closed behaviour: on any
+# ambiguity the call raises and nothing is written.
+
+
+def _started_engine(tmp_path, *, with_work_vault: bool):
+    life_vault = _build_vault(tmp_path)
+    work_vault = _build_work_vault(tmp_path) if with_work_vault else None
+    hermes_home = _build_hermes_home(tmp_path, life_vault, work_vault)
+    engine = LifeOSContextEngine()
+    engine.on_session_start("sess-vault", hermes_home=str(hermes_home), platform="cli", model="gpt-test")
+    return engine, life_vault, work_vault
+
+
+def _today_daily(vault: Path) -> Path:
+    return vault / "daily" / (datetime.now().strftime("%Y-%m-%d") + ".md")
+
+
+def test_resolve_vault_routes_each_label_to_its_own_root(tmp_path):
+    engine, life_vault, work_vault = _started_engine(tmp_path, with_work_vault=True)
+
+    assert engine._resolve_vault("life") == ("life", life_vault)
+    assert engine._resolve_vault("work") == ("work", work_vault)
+
+
+def test_promote_to_daily_writes_to_the_named_vault(tmp_path):
+    engine, life_vault, work_vault = _started_engine(tmp_path, with_work_vault=True)
+
+    result = json.loads(
+        engine.handle_tool_call(
+            "lifeos_promote_to_daily",
+            {"content": "SyncVet raw landing is not an approved design", "vault": "work"},
+        )
+    )
+
+    assert result["vault"] == "work"
+    assert Path(result["path"]).is_relative_to(work_vault)
+    assert "SyncVet raw landing" in _today_daily(work_vault).read_text(encoding="utf-8")
+    # The life vault's daily note must be untouched by a work promotion.
+    assert "SyncVet raw landing" not in _today_daily(life_vault).read_text(encoding="utf-8")
+
+
+def test_omitted_vault_raises_when_a_work_vault_is_configured(tmp_path):
+    engine, life_vault, _ = _started_engine(tmp_path, with_work_vault=True)
+    before = _today_daily(life_vault).read_text(encoding="utf-8")
+
+    result = json.loads(
+        engine.handle_tool_call("lifeos_promote_to_daily", {"content": "unrouted"})
+    )
+
+    assert "vault is required" in result["error"]
+    assert _today_daily(life_vault).read_text(encoding="utf-8") == before
+
+
+def test_omitted_vault_resolves_to_life_in_a_single_vault_home(tmp_path):
+    """Decision 3: one vault means one destination, so a default cannot misroute."""
+    engine, life_vault, _ = _started_engine(tmp_path, with_work_vault=False)
+
+    result = json.loads(
+        engine.handle_tool_call("lifeos_promote_to_daily", {"content": "dojo grading in October"})
+    )
+
+    assert result["vault"] == "life"
+    assert Path(result["path"]).is_relative_to(life_vault)
+
+
+def test_beacon_mismatch_refuses_the_write(tmp_path):
+    """A work_vault_path pointed at the life vault must not accept work writes."""
+    life_vault = _build_vault(tmp_path)
+    hermes_home = _build_hermes_home(tmp_path, life_vault, life_vault)
+    engine = LifeOSContextEngine()
+    engine.on_session_start("sess-mismatch", hermes_home=str(hermes_home), platform="cli", model="gpt-test")
+    before = _today_daily(life_vault).read_text(encoding="utf-8")
+
+    result = json.loads(
+        engine.handle_tool_call(
+            "lifeos_promote_to_daily", {"content": "work note", "vault": "work"}
+        )
+    )
+
+    assert "beacon mismatch" in result["error"]
+    assert _today_daily(life_vault).read_text(encoding="utf-8") == before
+
+
+def test_missing_beacon_refuses_the_write(tmp_path):
+    engine, life_vault, work_vault = _started_engine(tmp_path, with_work_vault=True)
+    (work_vault / "_vault-identity.md").unlink()
+
+    result = json.loads(
+        engine.handle_tool_call(
+            "lifeos_promote_to_daily", {"content": "work note", "vault": "work"}
+        )
+    )
+
+    assert "no _vault-identity.md" in result["error"]
+    assert not _today_daily(work_vault).exists()
+
+
+def test_beacon_without_vault_key_refuses_the_write(tmp_path):
+    engine, life_vault, work_vault = _started_engine(tmp_path, with_work_vault=True)
+    _write(work_vault / "_vault-identity.md", "---\nmanaged_by: nobody\n---\n\n# no label\n")
+
+    result = json.loads(
+        engine.handle_tool_call(
+            "lifeos_promote_to_daily", {"content": "work note", "vault": "work"}
+        )
+    )
+
+    assert "declares no `vault:` key" in result["error"]
+    assert not _today_daily(work_vault).exists()
+
+
+def test_unknown_vault_label_refuses_the_write(tmp_path):
+    engine, _, _ = _started_engine(tmp_path, with_work_vault=True)
+
+    result = json.loads(
+        engine.handle_tool_call(
+            "lifeos_promote_to_daily", {"content": "note", "vault": "personal"}
+        )
+    )
+
+    assert "unknown vault" in result["error"]
+
+
+def test_task_candidate_applies_to_the_vault_recorded_on_the_candidate(tmp_path):
+    engine, life_vault, work_vault = _started_engine(tmp_path, with_work_vault=True)
+
+    engine.handle_tool_call(
+        "lifeos_promote_to_task",
+        {"content": "Draft the WS1 ingestion gate", "target": "FusionLeap WS1"},
+    )
+    # Slice 2 threads this from the tool schema; Slice 1 reads it off the candidate.
+    engine.state["promotion_candidates"][0]["vault"] = "work"
+
+    applied = json.loads(engine.handle_tool_call("lifeos_apply_promotion_candidate", {"index": 0}))["applied"]
+
+    assert applied["vault"] == "work"
+    assert Path(applied["destination"]).is_relative_to(work_vault / "tasks")
+    assert not (life_vault / "tasks" / "draft-the-ws1-ingestion-gate.md").exists()
