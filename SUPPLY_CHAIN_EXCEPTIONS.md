@@ -1,13 +1,43 @@
 # Supply-Chain Exceptions
 
-Per-package exceptions to the publish-age policy enforced by:
+## POLICY DECISION 2026-08-04: fork audit RETIRED — upstream's native gates govern
 
-- `scripts/npm-audit-min-age.js` (auditor)
-- `scripts/git-hooks/pre-commit` (containment gate)
-- `.github/workflows/dep-age-audit.yml` (CI gate)
+The fork-side 21-day age gate (`scripts/npm-audit-min-age.js`, the
+`scripts/git-hooks/pre-commit` containment hook, and
+`.github/workflows/dep-age-audit.yml`) was removed on 2026-08-04, decided by Tony
+after the 0.20 upstream merge. Rationale: upstream now enforces the same
+threat model natively, applied EARLIER (at install/resolve time, before any
+lifecycle script could run) rather than at commit time, and running both gates
+made every upstream merge trip the fork hook on upstream's own lockfile pins.
+
+What governs now:
+
+- **npm**: repo `.npmrc` → `min-release-age=14` with upstream's maintained
+  per-package exclusion list (upstream-owned; we inherit their exclusions).
+- **Python**: `pyproject.toml` `[tool.uv]` → `exclude-newer = "14 days"` with
+  `exclude-newer-package` opt-outs (upstream-owned).
+- **Lifecycle-script containment (still ours)**: `ui-tui/.npmrc` →
+  `ignore-scripts=true`. Deliberately scoped to the TUI workspace only — a
+  repo-root `ignore-scripts` would break the desktop's Electron native-dep
+  postinstalls. This file is fork-owned and survives merges.
+
+Tradeoffs accepted with this decision: the age floor drops 21 → 14 days, and
+the per-package exclusion list is upstream's call, not ours. If either becomes
+uncomfortable, the retired tooling is recoverable from git history
+(`f99ba5e92`, `138a82d6d`, `419aeaa03`) — do not rebuild it from scratch.
+
+The historical policy text below is retained for the audit trail.
+
+---
+
+Per-package exceptions to the publish-age policy formerly enforced by:
+
+- `scripts/npm-audit-min-age.js` (auditor) — RETIRED
+- `scripts/git-hooks/pre-commit` (containment gate) — RETIRED
+- `.github/workflows/dep-age-audit.yml` (CI gate) — RETIRED
 - v4 arm64 handoff doc (Phase 3.5 / 4 / 7 install gates)
 
-Default policy: every dependency must be at least `MIN_AGE_DAYS=21` days old at the time of install or commit. The threat model is per-package; **do not lower `MIN_AGE_DAYS` globally to bypass a single violation** — instead, document the specific package and version here.
+Default policy was: every dependency must be at least `MIN_AGE_DAYS=21` days old at the time of install or commit. The threat model is per-package; **do not lower `MIN_AGE_DAYS` globally to bypass a single violation** — instead, document the specific package and version here.
 
 ## When to add an entry
 
@@ -41,7 +71,7 @@ If you use `SKIP_SUPPLY_CHAIN=1`, add a retroactive entry here within 24 hours.
 
 | Package | Ecosystem | Version | Reason | Reviewer | Approved | Expires | Linked PR |
 |---|---|---|---|---|---|---|---|
-| js-yaml@4.3.1, ip-address@10.4.0, brace-expansion@{1.1.18, 2.1.4, 5.0.9}, enhanced-resolve@5.24.5, flatted@3.4.4, acorn@8.18.0, minimatch@10.2.6, tar@7.5.22, @eslint-community/eslint-utils@4.10.1, own-keys@1.0.2, p-map@7.0.6, typescript-eslint@8.65.0 (+8 @typescript-eslint/* @8.65.0), string-width-cjs@4.2.3, strip-ansi-cjs@6.0.1 | npm | as listed | Upstream merge 2026-08-03 (origin/main @ 91937a6dc): versions come from upstream's `nix/node-gyp-11-4-0-package-lock.json`, not our choices; all are desktop/build tooling, none run in the Python daemons. Re-pinning inside the merge would diverge from upstream. Desktop rebuild is deferred (Node 26) — revisit before that build. | Tony (pending) | 2026-08-03 | 2026-09-03 | upstream merge, see UPSTREAM-UPDATE-PLAN.md |
+| _(none currently)_ | | | | | | | |
 
 ## Retired exceptions
 
@@ -49,7 +79,7 @@ Move expired or no-longer-needed entries here for audit trail. Do not delete.
 
 | Package | Ecosystem | Version | Approved | Retired | Why retired |
 |---|---|---|---|---|---|
-| _(none)_ | | | | | |
+| upstream-merge npm set (js-yaml, ip-address, brace-expansion ×3, enhanced-resolve, flatted, acorn, minimatch, tar, eslint-utils, own-keys, p-map, typescript-eslint ×9, string-width-cjs, strip-ansi-cjs) | npm | as listed | 2026-08-03 | 2026-08-04 | Fork gate retired — upstream's native min-release-age=14 governs; entry no longer applies |
 
 ## Notes on the columns
 
