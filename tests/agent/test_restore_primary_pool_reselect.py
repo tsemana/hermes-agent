@@ -188,7 +188,14 @@ class TestRestorePrimaryPoolReselect:
         setattr(agent, "_credential_pool", fallback_pool)
         agent.base_url = "https://fallback.example.com/v1"
 
-        assert agent._restore_primary_runtime() is True
+        # Post-merge, restore follows upstream's contract: the wrong-provider
+        # pool is dropped and the primary's pool is RELOADED via load_pool
+        # (not recovered from the runtime snapshot as the fork originally did).
+        with patch(
+            "agent.credential_pool.load_pool", return_value=primary_pool
+        ) as load_pool:
+            assert agent._restore_primary_runtime() is True
+        load_pool.assert_called_once_with("openai-codex")
         assert getattr(agent, "_credential_pool") is primary_pool
         assert agent.base_url == "https://primary.example.com/v1"
         assert agent.api_key == "primary-key"

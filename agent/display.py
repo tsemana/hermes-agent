@@ -1354,15 +1354,17 @@ def _detect_tool_failure(tool_name: str, result: str | None) -> tuple[bool, str]
     if not isinstance(result, str):
         return False, ""
 
-    # JSON-aware generic detection for non-terminal tools. Many successful
-    # tools include per-item ``error: null`` placeholders, so raw substring
-    # checks are too noisy.
+    # JSON-aware generic detection for non-terminal tools (fork + upstream
+    # merged): a dict result is authoritative — successful web-extract-style
+    # payloads carry per-item ``error: null`` placeholders, so they must
+    # never fall through to the raw substring heuristic (fork e154cd41c).
+    # When a real error string exists, surface its trimmed text instead of a
+    # bare marker (upstream's richer suffix).
     if isinstance(data, dict):
+        err = data.get("error") or data.get("message")
+        if isinstance(err, str) and err.strip():
+            return True, f" [{_trim_error(err)}]"
         if data.get("success") is False:
-            return True, " [error]"
-
-        top_error = data.get("error")
-        if isinstance(top_error, str) and top_error.strip():
             return True, " [error]"
 
         results = data.get("results")
@@ -1371,8 +1373,7 @@ def _detect_tool_failure(tool_name: str, result: str | None) -> tuple[bool, str]
                 if isinstance(item, dict):
                     item_error = item.get("error")
                     if isinstance(item_error, str) and item_error.strip():
-                        return True, " [error]"
-            return False, ""
+                        return True, f" [{_trim_error(item_error)}]"
 
         return False, ""
 

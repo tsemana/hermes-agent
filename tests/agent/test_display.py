@@ -193,11 +193,13 @@ class TestDetectToolFailure:
 
     def test_web_extract_item_error_is_failure(self):
         result = '{"results": [{"url": "https://blocked.test", "title": "", "content": "", "error": "Blocked by website policy"}]}'
-        assert _detect_tool_failure("web_extract", result) == (True, " [error]")
+        # Post-merge, the suffix carries the trimmed error text (upstream's
+        # richer surfacing) rather than the old bare " [error]" marker.
+        assert _detect_tool_failure("web_extract", result) == (True, " [Blocked by website policy]")
 
     def test_top_level_success_false_is_failure(self):
         result = '{"success": false, "error": "boom"}'
-        assert _detect_tool_failure("web_extract", result) == (True, " [error]")
+        assert _detect_tool_failure("web_extract", result) == (True, " [boom]")
 
 
 class TestEditDiffPreview:

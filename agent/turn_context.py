@@ -1182,13 +1182,18 @@ def build_turn_context(
     if getattr(agent, "context_compressor", None):
         try:
             _query = original_user_message if isinstance(original_user_message, str) else ""
-            context_engine_prefetch = agent.context_compressor.prefetch(
+            _prefetched = agent.context_compressor.prefetch(
                 _query,
                 session_id=agent.session_id,
                 conversation_history=list(messages),
                 model=agent.model,
                 platform=getattr(agent, "platform", None) or "",
-            ) or ""
+            )
+            # str-guard, not just truthiness: tests (and defensive callers)
+            # stub context_compressor with MagicMock, whose prefetch() returns
+            # a truthy mock that would blow up the injection join downstream.
+            if isinstance(_prefetched, str):
+                context_engine_prefetch = _prefetched
         except Exception as exc:
             logger.debug("Context engine prefetch failed: %s", exc)
 
