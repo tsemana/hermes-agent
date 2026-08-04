@@ -49,7 +49,7 @@ UV="$(command -v uv || echo "$HOME/.local/bin/uv")"
 TS="$(date +%Y%m%d-%H%M%S)"
 CMD="${1:-status}"; FLAG="${2:-}"
 
-has_custom() { [ -f "$1/scripts/npm-audit-min-age.js" ] || [ -d "$1/scripts/git-hooks" ]; }  # custom-feature fingerprint
+has_custom() { [ -d "$1/plugins/context_engine/lifeos" ] || [ -f "$1/SUPPLY_CHAIN_EXCEPTIONS.md" ]; }  # custom-feature fingerprint (audit files retired 2026-08-04)
 gitc() { git -C "$1" "${@:2}"; }
 
 # --- writer guard -------------------------------------------------------------------
