@@ -440,6 +440,7 @@ def test_run_agent_injects_context_engine_prefetch_into_user_turn(tmp_path):
 
     with (
         patch("hermes_cli.config.load_config", return_value=cfg),
+        patch("hermes_cli.config.load_config_readonly", return_value=cfg),
         patch("plugins.context_engine.load_context_engine", return_value=engine),
         patch("agent.model_metadata.get_model_context_length", return_value=131_072),
         patch("run_agent.get_tool_definitions", return_value=[]),
@@ -479,6 +480,7 @@ def test_run_agent_does_not_inject_context_engine_prefetch_into_system_prompt(tm
 
     with (
         patch("hermes_cli.config.load_config", return_value=cfg),
+        patch("hermes_cli.config.load_config_readonly", return_value=cfg),
         patch("plugins.context_engine.load_context_engine", return_value=engine),
         patch("agent.model_metadata.get_model_context_length", return_value=131_072),
         patch("run_agent.get_tool_definitions", return_value=[]),
@@ -517,6 +519,7 @@ def test_agent_registers_context_engine_tool_schemas_and_routes_tool_calls(tmp_p
 
     with (
         patch("hermes_cli.config.load_config", return_value=cfg),
+        patch("hermes_cli.config.load_config_readonly", return_value=cfg),
         patch("plugins.context_engine.load_context_engine", return_value=engine),
         patch("agent.model_metadata.get_model_context_length", return_value=131_072),
         patch("run_agent.get_tool_definitions", return_value=[]),
@@ -553,6 +556,7 @@ def test_agent_calls_context_engine_lifecycle_hooks_for_start_reset_and_end(tmp_
 
     with (
         patch("hermes_cli.config.load_config", return_value=cfg),
+        patch("hermes_cli.config.load_config_readonly", return_value=cfg),
         patch("plugins.context_engine.load_context_engine", return_value=engine),
         patch("agent.model_metadata.get_model_context_length", return_value=131_072),
         patch("run_agent.get_tool_definitions", return_value=[]),
@@ -595,6 +599,7 @@ def test_agent_falls_back_to_builtin_compressor_when_lifeos_engine_load_fails(tm
 
     with (
         patch("hermes_cli.config.load_config", return_value=cfg),
+        patch("hermes_cli.config.load_config_readonly", return_value=cfg),
         patch("plugins.context_engine.load_context_engine", side_effect=RuntimeError("boom")),
         patch("run_agent.get_tool_definitions", return_value=[]),
         patch("run_agent.check_toolset_requirements", return_value={}),
@@ -629,6 +634,7 @@ def test_run_agent_routes_context_engine_tool_call_end_to_end(tmp_path):
 
     with (
         patch("hermes_cli.config.load_config", return_value=cfg),
+        patch("hermes_cli.config.load_config_readonly", return_value=cfg),
         patch("plugins.context_engine.load_context_engine", return_value=engine),
         patch("agent.model_metadata.get_model_context_length", return_value=131_072),
         patch("run_agent.get_tool_definitions", return_value=[]),

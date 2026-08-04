@@ -41,7 +41,7 @@ If you use `SKIP_SUPPLY_CHAIN=1`, add a retroactive entry here within 24 hours.
 
 | Package | Ecosystem | Version | Reason | Reviewer | Approved | Expires | Linked PR |
 |---|---|---|---|---|---|---|---|
-| _(none currently)_ | | | | | | | |
+| js-yaml@4.3.1, ip-address@10.4.0, brace-expansion@{1.1.18, 2.1.4, 5.0.9}, enhanced-resolve@5.24.5, flatted@3.4.4, acorn@8.18.0, minimatch@10.2.6, tar@7.5.22, @eslint-community/eslint-utils@4.10.1, own-keys@1.0.2, p-map@7.0.6, typescript-eslint@8.65.0 (+8 @typescript-eslint/* @8.65.0), string-width-cjs@4.2.3, strip-ansi-cjs@6.0.1 | npm | as listed | Upstream merge 2026-08-03 (origin/main @ 91937a6dc): versions come from upstream's `nix/node-gyp-11-4-0-package-lock.json`, not our choices; all are desktop/build tooling, none run in the Python daemons. Re-pinning inside the merge would diverge from upstream. Desktop rebuild is deferred (Node 26) — revisit before that build. | Tony (pending) | 2026-08-03 | 2026-09-03 | upstream merge, see UPSTREAM-UPDATE-PLAN.md |
 
 ## Retired exceptions
 
