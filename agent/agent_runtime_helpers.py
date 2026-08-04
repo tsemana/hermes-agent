@@ -1220,6 +1220,15 @@ def restore_primary_runtime(agent) -> bool:
         agent._emit_status(
             f"Primary model restored: {agent.model} ({agent.provider})"
         )
+        # Drop the sticky "answering on fallback" notice — the degraded state
+        # this notice describes is over.  Paired with the emission in
+        # try_activate_fallback(); same key both sides.
+        try:
+            from agent.chat_completion_helpers import MODEL_FALLBACK_NOTICE_KEY
+
+            agent._emit_notice_clear(MODEL_FALLBACK_NOTICE_KEY)
+        except Exception:
+            logger.debug("Could not clear fallback notice", exc_info=True)
         return True
     except Exception as e:
         logger.warning("Failed to restore primary runtime: %s", e)

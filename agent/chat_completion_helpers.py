@@ -51,6 +51,21 @@ _OPENROUTER_PROVIDER_SORT_VALUES = {"throughput", "latency", "price"}
 # narrower non-rate-limit case.  See issue #24996.
 _FALLBACK_EXHAUSTED_COOLDOWN_S = 5.0
 
+# Sticky-notice key for "you are currently answering on a fallback model".
+# Fired by try_activate_fallback() on a successful switch and cleared by
+# restore_primary_runtime() once the primary comes back, so the notice lives
+# exactly as long as the degraded state does.
+#
+# Why a notice and not just a status line: the "switching to fallback" status
+# is routed through _buffer_status, which is DROPPED on success (see the
+# buffered-status contract in run_agent.py) — by design, so a recovered retry
+# storm doesn't spam the user.  A fallback that succeeds is not transient
+# noise though; it silently changes which model answers every following turn
+# until the primary recovers.  Without a sticky notice the only trace is
+# agent.log, so a session can run on the local fallback with the user reading
+# the answers as if they came from the configured primary.
+MODEL_FALLBACK_NOTICE_KEY = "model.fallback"
+
 
 def _ra():
     """Lazy ``run_agent`` reference.
@@ -1476,6 +1491,27 @@ def try_activate_fallback(agent, reason: "FailoverReason | None" = None) -> bool
             f"Fallback model active: {fb_model} ({fb_provider}); "
             f"primary {old_model} will be retried on a later turn."
         )
+        # Sticky notice so the degraded state stays visible after the status
+        # line scrolls away.  _emit_status is transient in the GUI drivers —
+        # it renders like "Thinking…" and vanishes when the turn ends, leaving
+        # no durable marker that the answer came from the fallback rather than
+        # the configured primary.  Cleared in restore_primary_runtime().
+        try:
+            from agent.credits_tracker import AgentNotice
+
+            agent._emit_notice(AgentNotice(
+                text=(
+                    f"⚠️ Answering on fallback model {fb_model} ({fb_provider}) — "
+                    f"primary {old_model} failed and is retried each turn."
+                ),
+                level="warn",
+                kind="sticky",
+                key=MODEL_FALLBACK_NOTICE_KEY,
+            ))
+        except Exception:
+            # A notice must never break the fallback path (fail-open, same
+            # contract as _emit_notice itself).
+            logger.debug("Could not emit fallback notice", exc_info=True)
         return True
     except Exception as e:
         if fb_provider == "nous":
@@ -2972,6 +3008,7 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
 
 
 __all__ = [
+    "MODEL_FALLBACK_NOTICE_KEY",
     "interruptible_api_call",
     "build_api_kwargs",
     "build_assistant_message",
