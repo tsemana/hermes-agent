@@ -50,6 +50,7 @@ _EXEMPT_DIRS = (
     ".git",
     ".venv",
     "venv",
+    "venv-update",  # fork: merge-worktree venv name (see UPSTREAM-UPDATE-PLAN.md)
     ".worktrees",
 )
 

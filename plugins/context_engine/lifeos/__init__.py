@@ -466,11 +466,18 @@ class LifeOSContextEngine(ContextCompressor):
         return _trim_text("\n\n".join(block for block in preview_blocks if block), self.max_block_chars)
 
     def _load_runtime_config(self) -> None:
+        # Raw path-parameterized read through the config owner module
+        # (enforced by tests/hermes_cli/test_config_read_guard.py). Raw is
+        # correct here: the engine reads only the fork's ``lifeos_context``
+        # root (no defaults, no env expansion) from a possibly per-instance
+        # hermes_home that the global load_config_readonly() cannot target.
         cfg_path = Path(self.hermes_home) / "config.yaml"
         config: Dict[str, Any] = {}
         if cfg_path.exists():
             try:
-                config = yaml.safe_load(cfg_path.read_text()) or {}
+                from hermes_cli.config import read_user_config_raw
+
+                config = read_user_config_raw(cfg_path) or {}
             except Exception as exc:
                 logger.debug("LifeOS context could not read %s: %s", cfg_path, exc)
         life_cfg = config.get("lifeos_context", {}) if isinstance(config, dict) else {}
