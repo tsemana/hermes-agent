@@ -857,7 +857,7 @@ class TurnController {
     }, STREAM_BATCH_MS)
   }
 
-  recordToolStart(toolId: string, name: string, context: string, verboseArgs?: string) {
+  recordToolStart(toolId: string, name: string, context: string, verboseArgs?: string, displayName?: string) {
     if (this.interrupted) {
       return
     }
@@ -870,7 +870,7 @@ class TurnController {
     const sample = `${name} ${context}`.trim()
 
     this.toolTokenAcc += sample ? estimateTokensRough(sample) : 0
-    this.activeTools = [...this.activeTools, { context, id: toolId, name, startedAt: Date.now(), verboseArgs }]
+    this.activeTools = [...this.activeTools, { context, displayName, id: toolId, name, startedAt: Date.now(), verboseArgs }]
 
     patchTurnState({ toolTokens: this.toolTokenAcc, tools: this.activeTools })
   }

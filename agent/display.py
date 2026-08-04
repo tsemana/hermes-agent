@@ -616,6 +616,19 @@ def get_tool_verb(tool_name: str) -> str | None:
     return _TOOL_VERBS.get(tool_name)
 
 
+def get_tool_display_name(tool_name: str, args: dict) -> str | None:
+    """Return a UI label when the raw tool name hides the target vault."""
+    if tool_name != "lifeos_promote_to_task":
+        return None
+
+    vault = str((args or {}).get("vault") or "").strip().lower()
+    if vault == "work":
+        return "Queue WorkOS task"
+    if vault == "life":
+        return "Queue LifeOS task"
+    return "Queue task"
+
+
 def tool_verb_connector(tool_name: str) -> str:
     """Return the connector between a verb and its preview (" for " or " ")."""
     return " for " if tool_name in _TOOL_VERBS_FOR_CONNECTOR else " "

@@ -723,7 +723,8 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
           ev.payload.tool_id,
           ev.payload.name ?? 'tool',
           ev.payload.context ?? '',
-          ev.payload.args_text ? stripAnsi(String(ev.payload.args_text)) : undefined
+          ev.payload.args_text ? stripAnsi(String(ev.payload.args_text)) : undefined,
+          ev.payload.display_name
         )
 
         return

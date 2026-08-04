@@ -3223,6 +3223,15 @@ def _tool_ctx(name: str, args: dict) -> str:
         return ""
 
 
+def _tool_display_name(name: str, args: dict) -> str | None:
+    try:
+        from agent.display import get_tool_display_name
+
+        return get_tool_display_name(name, args)
+    except Exception:
+        return None
+
+
 def _emit_session_info_for_session(sid: str, session: dict) -> None:
     agent = session.get("agent")
     if agent is None:
@@ -3374,6 +3383,9 @@ def _on_tool_start(sid: str, tool_call_id: str, name: str, args: dict):
             "name": name,
             "context": _tool_ctx(name, args),
         }
+        display_name = _tool_display_name(name, args)
+        if display_name:
+            payload["display_name"] = display_name
         if _session_verbose(sid):
             args_text = _tool_args_text(args)
             if args_text:

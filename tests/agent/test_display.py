@@ -495,3 +495,15 @@ class TestBuildToolLabel:
         for tool_name in _TOOL_VERBS:
             label = build_tool_label(tool_name, {"query": "x", "path": "x", "url": "x"})
             assert label, f"{tool_name} produced empty label"
+
+
+class TestGetToolDisplayName:
+    def test_work_task_capture_names_the_destination_vault(self):
+        from agent.display import get_tool_display_name
+
+        assert get_tool_display_name("lifeos_promote_to_task", {"vault": "work"}) == "Queue WorkOS task"
+
+    def test_life_task_capture_names_the_destination_vault(self):
+        from agent.display import get_tool_display_name
+
+        assert get_tool_display_name("lifeos_promote_to_task", {"vault": "life"}) == "Queue LifeOS task"

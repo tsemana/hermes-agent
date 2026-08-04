@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { formatAbandonedClarify, stripTrailingPasteNewlines } from './text.js'
+import { formatAbandonedClarify, formatToolCall, stripTrailingPasteNewlines } from './text.js'
 
 describe('stripTrailingPasteNewlines', () => {
   it('removes trailing newline runs from pasted text', () => {
@@ -49,5 +49,13 @@ describe('formatAbandonedClarify', () => {
 
     expect(out).toContain('  1. first')
     expect(out).not.toContain('  0.')
+  })
+})
+
+describe('formatToolCall', () => {
+  it('preserves an explicit display label instead of re-humanizing the raw tool name', () => {
+    expect(formatToolCall('Queue WorkOS task', 'Send the event-spine summary')).toBe(
+      'Queue WorkOS task("Send the event-spine summary")'
+    )
   })
 })
