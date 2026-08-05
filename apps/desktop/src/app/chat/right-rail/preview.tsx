@@ -30,7 +30,10 @@ import { $dirtyPreviewUrls } from '@/store/preview-edit'
 import { PreviewPane } from './preview-pane'
 
 export const PREVIEW_RAIL_MIN_WIDTH = '18rem'
-export const PREVIEW_RAIL_MAX_WIDTH = '38rem'
+// Fork: upstream caps the docked preview at 38rem (a "glance" surface).
+// Raised so the rail can serve as a real reading pane — the sash still
+// clamps against the neighboring zones' minimums, so it can't take over.
+export const PREVIEW_RAIL_MAX_WIDTH = '72rem'
 
 interface ChatPreviewRailProps {
   onRestartServer?: (url: string, context?: string) => Promise<string>
