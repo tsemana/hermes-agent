@@ -729,14 +729,44 @@ class LifeOSContextEngine(ContextCompressor):
         self._project_notes = []
         self._people_notes = []
         for vault_path in vault_paths:
-            self._project_notes.extend(self._load_note_index(vault_path / "memory" / "projects"))
-            self._people_notes.extend(self._load_note_index(vault_path / "memory" / "people"))
+            self._project_notes.extend(
+                self._load_note_indexes(
+                    vault_path / "memory" / "projects",
+                    vault_path / "projects",
+                )
+            )
+            self._people_notes.extend(
+                self._load_note_indexes(
+                    vault_path / "memory" / "people",
+                    vault_path / "people",
+                )
+            )
 
-    def _load_note_index(self, directory: Path) -> List[VaultNote]:
+    def _load_note_indexes(self, *directories: Path) -> List[VaultNote]:
+        """Merge shallow legacy and native homes without duplicate note paths.
+
+        ``memory/{projects,people}`` remains readable during the LifeOS-native
+        migration. The native homes are intentionally recursive for project
+        folders such as ``projects/<slug>/index.md``. A same-vault duplicate is
+        retained: the existing write-selection logic must refuse to guess when
+        two matching canonical candidates coexist.
+        """
+        notes: List[VaultNote] = []
+        seen_paths = set()
+        for directory in directories:
+            for note in self._load_note_index(directory, recursive=directory.name == "projects"):
+                resolved = note.path.resolve()
+                if resolved not in seen_paths:
+                    seen_paths.add(resolved)
+                    notes.append(note)
+        return notes
+
+    def _load_note_index(self, directory: Path, *, recursive: bool = False) -> List[VaultNote]:
         if not directory.exists():
             return []
         notes: List[VaultNote] = []
-        for path in sorted(directory.glob("*.md")):
+        paths = directory.rglob("*.md") if recursive else directory.glob("*.md")
+        for path in sorted(paths):
             note = self._read_vault_note(path)
             if note:
                 notes.append(note)
@@ -1010,6 +1040,15 @@ class LifeOSContextEngine(ContextCompressor):
             raise ValueError(
                 f"project {target!r} matches notes in more than one vault — pass "
                 f"`vault` to choose. Candidates: {listing}"
+            )
+
+        normalized = _normalize_phrase(target)
+        exact_matches = [n for n in matches if normalized in n.candidates]
+        if len(exact_matches) > 1:
+            listing = "; ".join(str(n.path) for n in exact_matches)
+            raise ValueError(
+                f"project {target!r} matches more than one project note — refusing "
+                f"to guess. Candidates: {listing}"
             )
 
         label = labels.pop()

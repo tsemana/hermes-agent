@@ -149,6 +149,61 @@ def test_lifeos_engine_routes_people_across_lifeos_and_workos(tmp_path):
     assert "Vetsource sponsor and manager" in work_person["preview"]
 
 
+def test_lifeos_engine_reads_legacy_and_native_project_and_people_locations(tmp_path):
+    """Native locations can be populated before legacy paths are retired."""
+    vault = _build_vault(tmp_path)
+    _write(
+        vault / "projects" / "mercury" / "index.md",
+        "---\ntitle: Mercury\naliases:\n  - project mercury\n---\n"
+        "# Mercury\n\nNative project record for the migration test.\n",
+    )
+    _write(
+        vault / "people" / "jane-doe.md",
+        "---\ntitle: Jane Doe\naliases:\n  - Jane\n---\n"
+        "# Jane Doe\n\nNative people record for the migration test.\n",
+    )
+    hermes_home = _build_hermes_home(tmp_path, vault)
+
+    engine = LifeOSContextEngine()
+    engine.on_session_start("sess-native-locations", hermes_home=str(hermes_home), platform="cli", model="gpt-test")
+
+    legacy_project = engine.prefetch("What is next on Phoenix?")
+    native_project = engine.prefetch("What is next on Mercury?")
+    legacy_person = json.loads(
+        engine.handle_tool_call("lifeos_refresh_context", {"scope": "person", "target": "Todd"})
+    )
+    native_person = json.loads(
+        engine.handle_tool_call("lifeos_refresh_context", {"scope": "person", "target": "Jane"})
+    )
+
+    assert "Project — Phoenix" in legacy_project
+    assert "Project — Mercury" in native_project
+    assert "Native project record" in native_project
+    assert "Primary finance counterpart" in legacy_person["preview"]
+    assert "Native people record" in native_person["preview"]
+
+
+def test_native_project_does_not_silently_win_over_a_legacy_duplicate_in_one_vault(tmp_path):
+    """Migration coexistence must not redirect a project promotion by sort order."""
+    vault = _build_vault(tmp_path)
+    _add_project(vault, "phoenix-native", "Phoenix", "Native project record.")
+    native = vault / "memory" / "projects" / "phoenix-native.md"
+    destination = vault / "projects" / "phoenix" / "index.md"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    native.replace(destination)
+    hermes_home = _build_hermes_home(tmp_path, vault)
+
+    engine = LifeOSContextEngine()
+    engine.on_session_start("sess-native-duplicate", hermes_home=str(hermes_home), platform="cli", model="gpt-test")
+
+    _queue_project(engine, "Phoenix", "must not select either duplicate")
+    result = json.loads(engine.handle_tool_call("lifeos_apply_promotion_candidate", {"index": 0}))
+
+    assert "more than one project note" in result["error"]
+    assert "must not select either duplicate" not in destination.read_text(encoding="utf-8")
+    assert "must not select either duplicate" not in (vault / "memory" / "projects" / "phoenix.md").read_text(encoding="utf-8")
+
+
 def test_lifeos_engine_prefetches_workos_project_on_normal_turn(tmp_path):
     life_vault = _build_vault(tmp_path)
     work_vault = _build_work_vault(tmp_path)
