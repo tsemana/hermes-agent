@@ -16,9 +16,20 @@ export interface LoneHeaderChrome {
 export function forceLoneHeaderForPanes(
   shown: readonly string[],
   chromeOf: (id: string) => LoneHeaderChrome,
-  isCollapsePane: (id: string) => boolean
+  isCollapsePane: (id: string) => boolean,
+  /** Fork: sessions visible across the WHOLE layout, not just this zone.
+   *  Splitting sessions into separate zones leaves each one "lone", so every
+   *  header auto-hides and nothing on screen says which session is which.
+   *  With more than one session open, a name card is orientation, not chrome —
+   *  so the uncloseable main workspace keeps its header too. One session on
+   *  screen stays clean (nothing to disambiguate). */
+  openSessionCount = 0
 ): boolean {
   if (shown.some(id => id.startsWith('session-tile:'))) {
+    return true
+  }
+
+  if (openSessionCount > 1 && shown.some(id => chromeOf(id).placement === 'main')) {
     return true
   }
 

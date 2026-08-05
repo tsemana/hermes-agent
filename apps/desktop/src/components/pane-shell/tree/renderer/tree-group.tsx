@@ -10,6 +10,8 @@
  */
 
 import { useStore } from '@nanostores/react'
+
+import { $sessionTiles } from '@/store/session-states'
 import { type CSSProperties, Fragment, type ReactNode, type RefObject, useEffect, useRef, useState } from 'react'
 
 import { ActionsContextMenu, type MenuKit, renderActionItem } from '@/components/ui/actions-menu'
@@ -178,6 +180,7 @@ export function TreeGroup({
   // Coarse drag flag only (set once at drag start/end). The per-frame drop
   // HINT lives in ZoneDropOverlay so a moving pointer re-renders the tiny
   // overlay, not every zone's header/body (and not the menuDirections walk).
+  const sessionTiles = useStore($sessionTiles)
   const dragging = useStore($treeDragging)
   const editMode = useStore($layoutEditMode)
   const wcOverlap = useWindowControlsOverlap(ref, true)
@@ -241,7 +244,15 @@ export function TreeGroup({
   // always shows its header (it IS the header).
   // Session-tile ids force the header even before chrome registers — cycling
   // onto a freshly-split tile used to land headerless ("name card missing").
-  const forceLoneHeader = forceLoneHeaderForPanes(shown, id => paneChrome(paneFor(id)), isCollapsePane)
+  // Fork: sessions open across the whole layout (tiles + the main workspace),
+  // so split-into-separate-zones sessions still get name cards for orientation.
+  const openSessionCount = sessionTiles.length + 1
+  const forceLoneHeader = forceLoneHeaderForPanes(
+    shown,
+    id => paneChrome(paneFor(id)),
+    isCollapsePane,
+    openSessionCount
+  )
 
   // A full-page view (headerVeto) suppresses the strip while it's the active
   // pane — a page is not a tab-able surface; the bar returns with the chat.
