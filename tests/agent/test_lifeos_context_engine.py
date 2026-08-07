@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import yaml
 
-from plugins.context_engine.lifeos import LifeOSContextEngine
+from plugins.context_engine.lifeos import LifeOSContextEngine, _focus_label
 
 
 def _write(path: Path, content: str) -> None:
@@ -300,6 +300,58 @@ def test_lifeos_engine_reset_clears_overlay_state(tmp_path):
     assert status["current_focus"] == ""
     assert status["tentative_updates"] == []
     assert status["promotion_candidates"] == []
+
+
+def test_lifeos_focus_label_drops_trailing_imperative():
+    """A focus captured from a user message must not read as an order.
+
+    ``current_focus`` stores the raw user turn, so it can carry a multi-line
+    instruction. Rendered verbatim it became the only instruction in a new
+    session opened with "hello", and the agent executed it (2026-08-06).
+    """
+    raw = (
+        "@file:.hermes/desktop-attachments/Google-Sensitive-Data-Protection-Brief.docx\n\n"
+        "take the text from this document and paste it into the appropriate sections "
+        "of the graphite doc\n\n--- Attached Context ---"
+    )
+    label = _focus_label(raw)
+
+    assert "paste it into" not in label
+    assert "Attached Context" not in label
+    assert "\n" not in label
+    assert label.startswith('"') and label.endswith('"')
+    assert "Google-Sensitive-Data-Protection-Brief.docx" in label
+
+
+def test_lifeos_focus_label_handles_empty_and_overlong():
+    assert _focus_label("") == ""
+    assert _focus_label("   ") == ""
+    assert _focus_label(None) == ""
+    long_label = _focus_label("x" * 400)
+    assert len(long_label) <= 122 and long_label.endswith('..."')
+
+
+def test_lifeos_engine_reset_drops_stale_base_block(tmp_path):
+    """Clearing current_focus is not enough — the base block embeds it.
+
+    Without this, the previous focus keeps being replayed into every new session
+    until the pinned block happens to age out.
+    """
+    vault = _build_vault(tmp_path)
+    hermes_home = _build_hermes_home(tmp_path, vault)
+
+    engine = LifeOSContextEngine()
+    engine.on_session_start("sess-stale", hermes_home=str(hermes_home), platform="cli", model="gpt-test")
+    engine.state.setdefault("pinned_blocks", {})["base"] = (
+        "## Operational Snapshot\n- Current focus: go delete the staging bucket"
+    )
+    engine.state.setdefault("last_refresh", {})["base"] = "2026-08-06T22:08:27.895013Z"
+
+    engine.on_session_reset()
+
+    assert engine.state["pinned_blocks"]["base"] == ""
+    assert "base" not in engine.state.get("last_refresh", {})
+    assert engine._is_stale("base") is True
 
 
 def test_lifeos_engine_writes_promoted_context_to_daily(tmp_path):
