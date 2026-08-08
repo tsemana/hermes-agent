@@ -48,6 +48,26 @@ _REGISTRY_NAME = "dashboard-compute-host.json"
 _RESPAWN_WINDOW_SECS = 300.0
 _SHUTDOWN_TIMEOUT_SECS = 10.0
 
+# Blocking-prompt bridges (server.py _block) whose wait lives in the child
+# when the turn runs under isolation. The child's *.request event passes
+# through _handle_host_frame on its way to the client, but the client's
+# *.respond lands in the parent's dispatcher — whose _pending map is a
+# different process's memory. Track the request_ids seen going out so
+# respond_prompt() can route the answer back into the child.
+_PROMPT_REQUEST_EVENTS = {
+    "clarify.request",
+    "sudo.request",
+    "secret.request",
+    "terminal.read.request",
+}
+_PROMPT_RELEASE_EVENTS = {
+    "clarify.expire",
+    "sudo.expire",
+    "secret.expire",
+    "terminal.read.expire",
+}
+_PROMPT_RID_MAX_AGE_SECS = 6 * 3600.0
+
 
 def append_log_record(path: str | Path, record: str) -> None:
     """Append one log record using O_APPEND and exactly one os.write call."""
@@ -167,6 +187,11 @@ class HostSupervisor:
         self._restart_times: list[float] = []
         self._pending_turns: dict[str, tuple[str, Callable[[dict], None] | None]] = {}
         self._pending_controls: dict[str, queue.Queue[dict]] = {}
+        # request_id -> monotonic timestamp of child-issued blocking prompts
+        # still (possibly) waiting in the child. Entries clear on answer,
+        # expire event, child exit, or age-out; a stale leftover only costs
+        # one no-op forward that the child acks as expired.
+        self._child_prompt_rids: dict[str, float] = {}
         self._stderr_tail: list[str] = []
         self._last_progress_counter = 0
 
@@ -412,6 +437,72 @@ class HostSupervisor:
                 self._stderr_tail = (self._stderr_tail + [text])[-80:]
                 logger.warning("compute host stderr: %s", text)
 
+    def _track_prompt_event(self, message: dict[str, Any]) -> None:
+        try:
+            if message.get("method") != "event":
+                return
+            params = message.get("params") or {}
+            etype = str(params.get("type") or "")
+            if etype not in _PROMPT_REQUEST_EVENTS and etype not in _PROMPT_RELEASE_EVENTS:
+                return
+            payload = params.get("payload") or {}
+            rid = str(payload.get("request_id") or "")
+            if not rid:
+                return
+            now = time.monotonic()
+            with self._lock:
+                if etype in _PROMPT_REQUEST_EVENTS:
+                    self._child_prompt_rids[rid] = now
+                    for old_rid, seen in list(self._child_prompt_rids.items()):
+                        if now - seen > _PROMPT_RID_MAX_AGE_SECS:
+                            self._child_prompt_rids.pop(old_rid, None)
+                else:
+                    self._child_prompt_rids.pop(rid, None)
+        except Exception:
+            logger.debug("prompt event tracking failed", exc_info=True)
+
+    def respond_prompt(
+        self, method: str, params: dict[str, Any], *, timeout: float = 10.0
+    ) -> dict[str, Any] | None:
+        """Deliver a blocking-prompt answer to the child that issued it.
+
+        Returns the child handler's result dict, or None when the request_id
+        was never seen from this child / the child is gone / the ack timed
+        out — callers fall back to their local expired path.
+        """
+        prompt_rid = str((params or {}).get("request_id") or "")
+        if not prompt_rid:
+            return None
+        with self._lock:
+            known = prompt_rid in self._child_prompt_rids
+        if not known or not self.is_running():
+            return None
+        ctrl_rid = uuid.uuid4().hex
+        q: queue.Queue[dict] = queue.Queue(maxsize=1)
+        with self._lock:
+            self._pending_controls[ctrl_rid] = q
+        try:
+            self._send_frame(
+                {
+                    "type": "prompt.respond",
+                    "request_id": ctrl_rid,
+                    "respond_method": method,
+                    "params": dict(params),
+                }
+            )
+            frame = q.get(timeout=timeout)
+        except Exception:
+            return None
+        finally:
+            with self._lock:
+                self._pending_controls.pop(ctrl_rid, None)
+        if str(frame.get("type")) != "control.ack":
+            return None
+        with self._lock:
+            self._child_prompt_rids.pop(prompt_rid, None)
+        result = frame.get("result")
+        return result if isinstance(result, dict) else {"status": "ok"}
+
     def _handle_host_frame(self, frame: dict[str, Any]) -> None:
         ftype = str(frame.get("type") or "")
         if ftype == "hello":
@@ -425,6 +516,7 @@ class HostSupervisor:
         if ftype == "rpc":
             message = frame.get("message")
             if isinstance(message, dict):
+                self._track_prompt_event(message)
                 self.rpc_sink(message)
             return
         if ftype in {"turn.end", "turn.error"}:
@@ -471,6 +563,8 @@ class HostSupervisor:
             if self._proc is not proc:
                 return
             self._proc = None
+            # The child's blocking waits died with it — no answer can land.
+            self._child_prompt_rids.clear()
         self._remove_registry()
         self._fail_pending_turns(reason="crash", message=f"compute host exited with code {code}")
         self._maybe_respawn_after_crash()

@@ -882,7 +882,11 @@ def _(rid, params: dict) -> dict:
     # from _pending) while the card is still visible — common when a WebSocket
     # reconnect during the wait drops tool.complete. A late answer must resolve
     # gracefully instead of hitting the raw 4009 "no pending answer request".
-    return _respond(rid, params, "answer", allow_expired=True)
+    # forward_method: under turn isolation the wait lives in the compute-host
+    # child; a local _pending miss forwards the answer there before expiring.
+    return _respond(
+        rid, params, "answer", allow_expired=True, forward_method="clarify.respond"
+    )
 
 
 @method("terminal.read.respond")
@@ -891,17 +895,23 @@ def _(rid, params: dict) -> dict:
     # allow_expired=True: the read_terminal tool's _block() uses a short 30s
     # timeout, so a slow renderer losing the race is the common case — a late
     # response must not error after the tool already returned empty.
-    return _respond(rid, params, "text", allow_expired=True)
+    return _respond(
+        rid, params, "text", allow_expired=True, forward_method="terminal.read.respond"
+    )
 
 
 @method("sudo.respond")
 def _(rid, params: dict) -> dict:
-    return _respond(rid, params, "password", allow_expired=True)
+    return _respond(
+        rid, params, "password", allow_expired=True, forward_method="sudo.respond"
+    )
 
 
 @method("secret.respond")
 def _(rid, params: dict) -> dict:
-    return _respond(rid, params, "value", allow_expired=True)
+    return _respond(
+        rid, params, "value", allow_expired=True, forward_method="secret.respond"
+    )
 
 
 @method("approval.respond")

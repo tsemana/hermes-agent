@@ -10481,18 +10481,38 @@ def _stage_session_file_attachment(
 # ── Methods: respond ─────────────────────────────────────────────────
 
 
-def _respond(rid, params, key, *, allow_expired=False):
+def _respond(rid, params, key, *, allow_expired=False, forward_method=None):
     r = params.get("request_id", "")
     with _prompt_lock:
         entry = _pending.get(r)
-        if not entry:
-            if allow_expired and r:
-                return _ok(rid, {"status": "expired"})
-            return _err(rid, 4009, f"no pending {key} request")
-        _, ev = entry
-        _answers[r] = params.get(key, "")
-        ev.set()
-    return _ok(rid, {"status": "ok"})
+        if entry:
+            _, ev = entry
+            _answers[r] = params.get(key, "")
+            ev.set()
+            return _ok(rid, {"status": "ok"})
+
+    # Not pending in this process. Under turn isolation the blocking wait
+    # (_block) runs inside the compute-host child — a different process with
+    # its own _pending map — while the client's *.respond RPC dispatches
+    # here. Route the answer to the child before declaring it expired, or
+    # every clarify/sudo/secret/terminal.read answer silently vanishes and
+    # the child blocks until its timeout. Read the supervisor global directly:
+    # never construct one from a respond (and in the child it stays None,
+    # which also breaks any forwarding recursion).
+    if forward_method and r:
+        sup = _compute_host_supervisor
+        if sup is not None:
+            try:
+                result = sup.respond_prompt(forward_method, dict(params))
+            except Exception:
+                logger.debug("prompt respond forward failed", exc_info=True)
+                result = None
+            if result is not None:
+                return _ok(rid, result)
+
+    if allow_expired and r:
+        return _ok(rid, {"status": "expired"})
+    return _err(rid, 4009, f"no pending {key} request")
 
 
 # ── Methods: config ──────────────────────────────────────────────────

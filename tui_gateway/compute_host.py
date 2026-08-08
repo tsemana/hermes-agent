@@ -275,6 +275,8 @@ class ComputeHost:
             self._handle_reload_mcp(frame)
         elif kind == "control":
             self._handle_control(frame)
+        elif kind == "prompt.respond":
+            self._handle_prompt_respond(frame)
         elif kind == "shutdown":
             self.emit({"type": "shutdown.ack", "request_id": frame.get("request_id")})
             # Explicit supervisor/test shutdown is a clean child-process close;
@@ -370,6 +372,16 @@ class ComputeHost:
                 session["queued_prompt"] = None
                 session.pop("queued_prompts", None)
                 session["_queued_prompt_generation"] = int(session.get("_queued_prompt_generation", 0)) + 1
+            # Mirror the parent's session.interrupt: release THIS session's
+            # blocking prompts (clarify/sudo/secret/terminal.read) waiting in
+            # this process, or Stop leaves the tool thread pinned in _block()
+            # until its timeout. Session-scoped for the same reason as the
+            # parent — a global clear would resolve unrelated sessions'
+            # prompts to empty strings.
+            try:
+                server._clear_pending(sid)
+            except Exception:
+                pass
             self.emit({"type": "interrupt.ack", "sid": sid, "request_id": frame.get("request_id"), "applied": True, "applied_ns": now_ns()})
         except Exception as exc:
             self.emit({"type": "interrupt.ack", "sid": sid, "request_id": frame.get("request_id"), "applied": False, "message": str(exc)})
@@ -643,6 +655,72 @@ class ComputeHost:
             self.emit({"type": "reload_mcp.ack", "sid": sid, "request_id": request_id, "response": resp})
         except Exception as exc:
             self.emit({"type": "control.error", "sid": sid, "request_id": request_id, "message": str(exc)})
+
+    _PROMPT_RESPOND_METHODS = frozenset(
+        {"clarify.respond", "sudo.respond", "secret.respond", "terminal.read.respond"}
+    )
+
+    def _handle_prompt_respond(self, frame: dict[str, Any]) -> None:
+        """Resolve a blocking prompt (server._block) waiting in THIS process.
+
+        Turn isolation moves the whole turn — including clarify/sudo/secret/
+        terminal.read waits — into this child, but the client's ``*.respond``
+        RPC is dispatched in the parent, against the parent's empty _pending
+        map. The supervisor forwards those answers here; delegating to this
+        process's registered handler sets the local Event and unblocks the
+        tool thread.
+        """
+        request_id = str(frame.get("request_id") or "")
+        method_name = str(frame.get("respond_method") or "")
+        params = frame.get("params")
+        if not isinstance(params, dict):
+            params = {}
+        if method_name not in self._PROMPT_RESPOND_METHODS:
+            self.emit(
+                {
+                    "type": "control.error",
+                    "request_id": request_id,
+                    "message": f"unsupported respond method: {method_name}",
+                }
+            )
+            return
+        try:
+            from tui_gateway import server
+
+            handler = getattr(server, "_methods", {}).get(method_name)
+            if handler is None:
+                self.emit(
+                    {
+                        "type": "control.error",
+                        "request_id": request_id,
+                        "message": f"respond method not registered: {method_name}",
+                    }
+                )
+                return
+            response = handler(request_id, dict(params))
+            if isinstance(response, dict) and "error" in response:
+                self.emit(
+                    {
+                        "type": "control.error",
+                        "request_id": request_id,
+                        "message": str(
+                            (response.get("error") or {}).get("message") or "respond failed"
+                        ),
+                    }
+                )
+                return
+            result = response.get("result") if isinstance(response, dict) else None
+            self.emit(
+                {
+                    "type": "control.ack",
+                    "request_id": request_id,
+                    "result": result if isinstance(result, dict) else {},
+                }
+            )
+        except Exception as exc:
+            self.emit(
+                {"type": "control.error", "request_id": request_id, "message": str(exc)}
+            )
 
     def _handle_control(self, frame: dict[str, Any]) -> None:
         sid = str(frame.get("sid") or "")
